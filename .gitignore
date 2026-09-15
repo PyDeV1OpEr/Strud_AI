@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Strud Cache
+strud_cache/
+
+# OS / Editor Files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp
