@@ -5,13 +5,14 @@
 # Responsibilities:
 #   1. Load/build the Biology Resource Book index
 #   2. TF-IDF retrieval
-#   3. Optional semantic retrieval
-#   4. Reciprocal Rank Fusion
-#   5. Page-aware result aggregation
-#   6. Grounding confidence calculation
-#   7. 0.55 grounding gate
-#   8. Build textbook context
-#   9. Provide source pages
+#   3. BM25 sparse lexical retrieval (hybrid mode only)
+#   4. Optional semantic retrieval
+#   5. Weighted Reciprocal Rank Fusion (N ranked lists)
+#   6. Page-aware result aggregation
+#   7. Grounding confidence calculation
+#   8. 0.55 grounding gate
+#   9. Build textbook context
+#  10. Provide source pages
 #
 # main.py only needs:
 #
@@ -37,7 +38,10 @@ from typing import Any, Optional
 import numpy as np
 import pymupdf
 
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import (
+    CountVectorizer,
+    TfidfVectorizer,
+)
 from sklearn.metrics.pairwise import cosine_similarity
 
 
@@ -56,6 +60,8 @@ from config import (
     SEMANTIC_FILE,
     SEMANTIC_META_FILE,
 
+    BM25_FILE,
+
     EMBEDDING_MODEL,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_DEVICE,
@@ -73,6 +79,16 @@ from config import (
     GROUNDING_THRESHOLD,
 
     RRF_K,
+
+    RRF_WEIGHTS,
+
+    RETRIEVAL_MODE,
+    BM25_ENABLED,
+    BM25_TOP_K,
+    BM25_K1,
+    BM25_B,
+    BM25_MIN_QUALITY,
+    BM25_MAX_QUALITY,
 
     ENABLE_NEIGHBOR_PAGES,
     NEIGHBOR_PAGE_PENALTY,
@@ -126,6 +142,24 @@ semantic_available = False
 _initialized = False
 
 # --------------------------------------------------------
+# BM25 index (Phase 1)
+# --------------------------------------------------------
+
+bm25_vectorizer: Any = None
+
+# Sparse document-term count matrix (CSC, so per-term column
+# lookups during scoring are cheap).
+bm25_counts: Any = None
+
+bm25_idf: Any = None
+
+bm25_doc_len: Any = None
+
+bm25_avgdl: float = 0.0
+
+bm25_available = False
+
+# --------------------------------------------------------
 # Visual chunks (Qwen3-VL derived)
 # --------------------------------------------------------
 
@@ -154,6 +188,7 @@ class RetrievalResult:
 
     tfidf_score: float = 0.0
     semantic_score: float = 0.0
+    bm25_score: float = 0.0
     rrf_score: float = 0.0
 
     page_score: float = 0.0
@@ -891,7 +926,12 @@ def initialize_retriever() -> bool:
         ):
             build_semantic_index()
 
+        # BM25 lexical leg (hybrid mode only; cached like the rest).
+        ensure_bm25_index()
+
         # Attach persisted Qwen visual chunks to the index.
+        # (This may rebuild the BM25 statistics if visual chunks
+        #  were appended.)
         attach_visual_chunks()
 
         return True
@@ -910,6 +950,9 @@ def initialize_retriever() -> bool:
         and not semantic_available
     ):
         build_semantic_index()
+
+    # BM25 lexical leg (hybrid mode only).
+    ensure_bm25_index()
 
     # Attach persisted Qwen visual chunks to the index.
     attach_visual_chunks()
@@ -1014,6 +1057,9 @@ def attach_visual_chunks() -> int:
     visual_chunks = wrapped
     _visual_attached = True
 
+    # Visual chunks change the document set: keep BM25 in sync.
+    refresh_bm25_index()
+
     # Semantic embeddings for visual chunks only.
     model = load_embedding_model()
 
@@ -1097,6 +1143,9 @@ def attach_new_visual_chunk(visual_record: dict[str, Any]) -> bool:
     tfidf_vectorizer = new_vectorizer
     tfidf_matrix = new_matrix
     visual_chunks = visual_chunks + [wrapped]
+
+    # Keep the BM25 document set in sync with the TF-IDF one.
+    refresh_bm25_index()
 
     model = load_embedding_model()
 
@@ -1193,6 +1242,346 @@ def keyword_search(
                 tfidf_score=float(
                     scores[index]
                 ),
+            )
+        )
+
+    return results
+
+
+# ============================================================
+# BM25 (SPARSE LEXICAL RETRIEVAL)
+# ============================================================
+#
+# BM25 complements TF-IDF. TF-IDF cosine similarity flattens long
+# chunks; BM25 saturates term frequency and normalises by document
+# length, which is what matters for exact Biology terminology
+# (e.g. "ribulose bisphosphate", "antidiuretic hormone").
+#
+# It is added as a THIRD ranked list inside the SAME page-aware
+# pipeline. It never replaces TF-IDF, never bypasses page
+# aggregation, and never bypasses the grounding gate.
+
+# Token pattern keeps hyphenated / primed Biology terms intact,
+# e.g. "acetyl-coa", "9+2" is split as expected by the book text.
+BM25_TOKEN_PATTERN = r"[a-z0-9]+(?:[-'][a-z0-9]+)*"
+
+# Bump when the tokenizer or scoring model changes so that stale
+# cached indexes are rebuilt instead of silently reused.
+BM25_INDEX_VERSION = 1
+
+
+def build_bm25(texts: list[str]) -> bool:
+    """
+    Build BM25 statistics over the given chunk texts.
+
+    Stores:
+        - the fitted count vectorizer (vocabulary)
+        - document-term counts (CSC)
+        - per-term IDF
+        - document lengths + average document length
+    """
+
+    global bm25_vectorizer
+    global bm25_counts
+    global bm25_idf
+    global bm25_doc_len
+    global bm25_avgdl
+    global bm25_available
+
+    if not texts:
+        return False
+
+    try:
+
+        vectorizer = CountVectorizer(
+            lowercase=True,
+            strip_accents="unicode",
+            token_pattern=BM25_TOKEN_PATTERN,
+            ngram_range=(1, 1),
+            dtype=np.float32,
+        )
+
+        counts = vectorizer.fit_transform(texts)
+
+    except Exception:
+
+        return False
+
+    if counts.shape[0] != len(texts) or counts.shape[1] == 0:
+        return False
+
+    doc_len = np.asarray(
+        counts.sum(axis=1),
+    ).ravel().astype(np.float32)
+
+    avgdl = float(doc_len.mean()) if doc_len.size else 0.0
+
+    if avgdl <= 0:
+        return False
+
+    document_frequency = np.asarray(
+        (counts > 0).sum(axis=0),
+    ).ravel().astype(np.float32)
+
+    n_docs = float(counts.shape[0])
+
+    # Standard BM25 IDF (the +1 variant keeps IDF non-negative for
+    # terms that appear in most documents).
+    idf = np.log(
+        (n_docs - document_frequency + 0.5)
+        / (document_frequency + 0.5)
+        + 1.0
+    ).astype(np.float32)
+
+    bm25_vectorizer = vectorizer
+    bm25_counts = counts.tocsc()
+    bm25_idf = idf
+    bm25_doc_len = doc_len
+    bm25_avgdl = avgdl
+    bm25_available = True
+
+    return True
+
+
+def save_bm25_cache() -> bool:
+
+    if (
+        not bm25_available
+        or bm25_vectorizer is None
+        or pdf_signature is None
+    ):
+        return False
+
+    ensure_cache_dir()
+
+    temp = BM25_FILE.with_suffix(".tmp")
+
+    payload = {
+        "version": BM25_INDEX_VERSION,
+        "pdf_signature": pdf_signature,
+        "chunk_size": CHUNK_SIZE,
+        "chunk_overlap": CHUNK_OVERLAP,
+        "chunk_count": len(chunks),
+        "k1": BM25_K1,
+        "b": BM25_B,
+        "token_pattern": BM25_TOKEN_PATTERN,
+        "vectorizer": bm25_vectorizer,
+        "counts": bm25_counts,
+        "idf": bm25_idf,
+        "doc_len": bm25_doc_len,
+        "avgdl": bm25_avgdl,
+    }
+
+    try:
+
+        with open(temp, "wb") as file:
+
+            pickle.dump(
+                payload,
+                file,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+
+        os.replace(temp, BM25_FILE)
+
+        return True
+
+    except Exception:
+
+        safe_remove(temp)
+
+        return False
+
+
+def load_bm25_cache() -> bool:
+
+    global bm25_vectorizer
+    global bm25_counts
+    global bm25_idf
+    global bm25_doc_len
+    global bm25_avgdl
+    global bm25_available
+
+    if (
+        not BM25_FILE.exists()
+        or not chunks
+        or pdf_signature is None
+    ):
+        return False
+
+    try:
+
+        with open(BM25_FILE, "rb") as file:
+
+            payload = pickle.load(file)
+
+        if not isinstance(payload, dict):
+            return False
+
+        if payload.get("version") != BM25_INDEX_VERSION:
+            return False
+
+        if payload.get("pdf_signature") != pdf_signature:
+            return False
+
+        if payload.get("chunk_size") != CHUNK_SIZE:
+            return False
+
+        if payload.get("chunk_overlap") != CHUNK_OVERLAP:
+            return False
+
+        if payload.get("chunk_count") != len(chunks):
+            return False
+
+        if payload.get("k1") != BM25_K1 or payload.get("b") != BM25_B:
+            return False
+
+        if payload.get("token_pattern") != BM25_TOKEN_PATTERN:
+            return False
+
+        counts = payload.get("counts")
+        vectorizer = payload.get("vectorizer")
+
+        if counts is None or vectorizer is None:
+            return False
+
+        if counts.shape[0] != len(chunks):
+            return False
+
+        avgdl = float(payload.get("avgdl") or 0.0)
+
+        if avgdl <= 0:
+            return False
+
+        bm25_vectorizer = vectorizer
+        bm25_counts = counts
+        bm25_idf = payload.get("idf")
+        bm25_doc_len = payload.get("doc_len")
+        bm25_avgdl = avgdl
+        bm25_available = True
+
+        return True
+
+    except Exception:
+
+        bm25_available = False
+
+        return False
+
+
+def refresh_bm25_index() -> bool:
+    """Rebuild + persist BM25 from the CURRENT chunk list."""
+
+    if not BM25_ENABLED or not chunks:
+        return False
+
+    if not build_bm25([item["text"] for item in chunks]):
+        return False
+
+    save_bm25_cache()
+
+    return True
+
+
+def ensure_bm25_index() -> bool:
+    """Load a valid BM25 cache, otherwise build one."""
+
+    if not BM25_ENABLED:
+        return False
+
+    if load_bm25_cache():
+        return True
+
+    return refresh_bm25_index()
+
+
+def bm25_search(
+    query: str,
+    top_k: int = BM25_TOP_K,
+) -> list[RetrievalResult]:
+    """
+    BM25 ranking over the same chunks used by TF-IDF/semantic search.
+    """
+
+    if (
+        not query.strip()
+        or not chunks
+        or not bm25_available
+        or bm25_vectorizer is None
+        or bm25_counts is None
+        or bm25_idf is None
+        or bm25_doc_len is None
+    ):
+        return []
+
+    try:
+
+        query_vector = bm25_vectorizer.transform(
+            [expand_query(query)]
+        )
+
+    except Exception:
+
+        return []
+
+    if query_vector.nnz == 0:
+        return []
+
+    k1 = float(BM25_K1)
+    b = float(BM25_B)
+
+    length_ratio = bm25_doc_len / bm25_avgdl
+
+    denominator_base = k1 * (
+        1.0 - b + b * length_ratio
+    )
+
+    scores = np.zeros(
+        bm25_counts.shape[0],
+        dtype=np.float32,
+    )
+
+    for term in {int(t) for t in query_vector.indices}:
+
+        column = bm25_counts.getcol(term).tocoo()
+
+        if column.nnz == 0:
+            continue
+
+        rows = column.row
+        frequencies = column.data.astype(np.float32)
+
+        numerators = frequencies * (k1 + 1.0)
+        denominators = frequencies + denominator_base[rows]
+
+        scores[rows] += (
+            bm25_idf[term]
+            * (numerators / denominators)
+        )
+
+    candidates = np.where(scores > 0)[0]
+
+    if candidates.size == 0:
+        return []
+
+    candidates = candidates[
+        np.argsort(scores[candidates])[::-1]
+    ]
+
+    candidates = candidates[:top_k]
+
+    results: list[RetrievalResult] = []
+
+    for index in candidates:
+
+        chunk = chunks[int(index)]
+
+        results.append(
+            RetrievalResult(
+                index=int(index),
+                page=int(chunk["page"]),
+                text=chunk["text"],
+                bm25_score=float(scores[index]),
             )
         )
 
@@ -1730,37 +2119,56 @@ def semantic_search(
 def reciprocal_rank_fusion(
     tfidf_results: list[RetrievalResult],
     semantic_results: list[RetrievalResult],
+    bm25_results: list[RetrievalResult] | None = None,
+    weights: dict[str, float] | None = None,
 ) -> dict[int, float]:
+    """
+    Weighted Reciprocal Rank Fusion over N ranked lists.
+
+    With weights left at 1.0 this is IDENTICAL to the original
+    two-list fusion, so existing behaviour is preserved.
+    """
+
+    active_weights = weights or RRF_WEIGHTS
 
     scores: dict[int, float] = {}
 
-    for rank, result in enumerate(
+    def add_ranking(
+        results: list[RetrievalResult] | None,
+        weight: float,
+    ) -> None:
+
+        if not results or weight <= 0:
+            return
+
+        for rank, result in enumerate(
+            results,
+            start=1,
+        ):
+
+            scores[result.index] = (
+                scores.get(
+                    result.index,
+                    0.0,
+                )
+                + weight
+                / (RRF_K + rank)
+            )
+
+    add_ranking(
         tfidf_results,
-        start=1,
-    ):
+        float(active_weights.get("tfidf", 1.0)),
+    )
 
-        scores[result.index] = (
-            scores.get(
-                result.index,
-                0.0,
-            )
-            + 1.0
-            / (RRF_K + rank)
-        )
-
-    for rank, result in enumerate(
+    add_ranking(
         semantic_results,
-        start=1,
-    ):
+        float(active_weights.get("semantic", 1.0)),
+    )
 
-        scores[result.index] = (
-            scores.get(
-                result.index,
-                0.0,
-            )
-            + 1.0
-            / (RRF_K + rank)
-        )
+    add_ranking(
+        bm25_results,
+        float(active_weights.get("bm25", 1.0)),
+    )
 
     return scores
 
@@ -1814,8 +2222,11 @@ def calculate_phrase_boost(
 def merge_results(
     tfidf_results: list[RetrievalResult],
     semantic_results: list[RetrievalResult],
+    bm25_results: list[RetrievalResult] | None = None,
     query: str = "",
 ) -> list[RetrievalResult]:
+
+    bm25_results = bm25_results or []
 
     merged: dict[
         int,
@@ -1831,9 +2242,16 @@ def merge_results(
         else:
             merged[result.index].semantic_score = result.semantic_score
 
+    for result in bm25_results:
+        if result.index not in merged:
+            merged[result.index] = result
+        else:
+            merged[result.index].bm25_score = result.bm25_score
+
     rrf_scores = reciprocal_rank_fusion(
         tfidf_results,
         semantic_results,
+        bm25_results,
     )
 
     for index, score in rrf_scores.items():
@@ -1941,6 +2359,30 @@ def semantic_quality(
     )
 
 
+def bm25_quality(
+    score: float,
+) -> float:
+
+    low = BM25_MIN_QUALITY
+
+    high = BM25_MAX_QUALITY
+
+    if score <= low:
+        return 0.0
+
+    if score >= high:
+        return 1.0
+
+    return clamp01(
+        (
+            score - low
+        )
+        / (
+            high - low
+        )
+    )
+
+
 # ============================================================
 # AGREEMENT
 # ============================================================
@@ -1949,6 +2391,15 @@ def calculate_agreement(
     tfidf_results: list[RetrievalResult],
     semantic_results: list[RetrievalResult],
 ) -> float:
+    """
+    Do the lexical and dense legs agree on the same material?
+
+    Phase 3 change: this was binary (any overlap in the top 5 -> 1.0).
+    That over-credited single-chance collisions. It is now graduated:
+    0.5 for one shared page, 1.0 for two or more. Single-chance
+    collisions remain the weakest form of agreement, which is exactly
+    the situation the evidence-sufficiency layer then has to judge.
+    """
 
     if (
         not tfidf_results
@@ -1974,7 +2425,7 @@ def calculate_agreement(
     if not common_pages:
         return 0.0
 
-    return 1.0
+    return 1.0 if len(common_pages) >= 2 else 0.5
 
 
 # ============================================================
@@ -2010,6 +2461,7 @@ def calculate_grounding_confidence(
     results: list[RetrievalResult],
     tfidf_results: list[RetrievalResult],
     semantic_results: list[RetrievalResult],
+    bm25_results: list[RetrievalResult] | None = None,
 ) -> float:
 
     if not results:
@@ -2020,6 +2472,32 @@ def calculate_grounding_confidence(
     lexical = lexical_quality(
         best.tfidf_score
     )
+
+    # BM25 may only STRENGTHEN the lexical signal (max, never a
+    # replacement), so enabling the BM25 leg cannot make the
+    # grounding gate stricter for an existing question.
+    #
+    # MEASURED SIDE EFFECT (tests/benchmark_retrieval.py): on questions
+    # the textbook does not really answer, BM25 words raised this
+    # lexical term and pushed an off-target page further above the gate
+    # (e.g. 0.697 -> 0.783 on an enzyme-name probe).
+    #
+    # FIX (Phase 3): BM25 may only lift the lexical signal when the
+    # DENSE leg agrees that the same page is relevant. Lexical vocab
+    # alone is not evidence.
+    if bm25_results and semantic_results:
+
+        dense_top_pages = {
+            result.page
+            for result in semantic_results[:5]
+        }
+
+        if best.page in dense_top_pages:
+
+            lexical = max(
+                lexical,
+                bm25_quality(best.bm25_score),
+            )
 
     semantic = semantic_quality(
         best.semantic_score
@@ -2285,12 +2763,25 @@ def retrieve_biology(
         )
 
     # --------------------------------------------------------
+    # BM25 (hybrid mode only)
+    # --------------------------------------------------------
+
+    bm25_results: list[RetrievalResult] = []
+
+    if BM25_ENABLED and bm25_available:
+
+        bm25_results = bm25_search(
+            query
+        )
+
+    # --------------------------------------------------------
     # Merge with exact phrase matching boost
     # --------------------------------------------------------
 
     merged = merge_results(
         tfidf_results,
         semantic_results,
+        bm25_results,
         query=query,
     )
 
@@ -2316,6 +2807,7 @@ def retrieve_biology(
             results=merged,
             tfidf_results=tfidf_results,
             semantic_results=semantic_results,
+            bm25_results=bm25_results,
         )
     )
 
@@ -2475,6 +2967,13 @@ def get_retriever_status() -> dict[str, Any]:
             tfidf_vectorizer is not None
             and tfidf_matrix is not None
         ),
+        "bm25_available": (
+            bm25_available
+        ),
+        "retrieval_mode": (
+            RETRIEVAL_MODE
+        ),
+        "rrf_weights": dict(RRF_WEIGHTS),
         "semantic_available": (
             semantic_available
         ),

@@ -18,6 +18,8 @@ from rich.text import Text
 from rich.status import Status
 from rich.box import ROUNDED, HEAVY_HEAD, MINIMAL
 
+from config import ASSISTANT_NAME
+
 import pyfiglet
 
 
@@ -102,7 +104,7 @@ class StrudRenderer:
 
         header_content = Text()
         header_content.append("Personal AI Study Assistant for G.C.E. A/L Biology\n", style="italic bright_white")
-        header_content.append(f"Model: {model_name}  •  Runtime: LM Studio (Local / Offline)", style="dim white")
+        header_content.append("Biology-focused  •  Local / Offline", style="dim white")
 
         banner_panel = Panel(
             Text.assemble(title_text, "\n", header_content),
@@ -118,9 +120,9 @@ class StrudRenderer:
         table.add_column()
 
         if llm_status:
-            table.add_row(f"[{ICONS['success']}] LM Studio", f"[green]Connected[/green] ({model_name})")
+            table.add_row(f"[{ICONS['success']}] Engine", "[green]Connected[/green]")
         else:
-            table.add_row(f"[{ICONS['error']}] LM Studio", "[red]Not connected[/red] (Start server on port 1234)")
+            table.add_row(f"[{ICONS['error']}] Engine", "[red]Not connected[/red] (Start the local engine on port 1234)")
 
         if textbook_status:
             table.add_row(
@@ -163,7 +165,7 @@ class StrudRenderer:
 
         table.add_row("/help", "Show this help menu")
         table.add_row("/clear", "Clear conversation history")
-        table.add_row("/status", "Display LM Studio connection & retriever status")
+        table.add_row("/status", "Display engine connection & retriever status")
         table.add_row("/vision", "Vision status, or debug vision for a question")
         table.add_row("/image <path>", "Upload a Biology image for analysis")
         table.add_row("/quit", "Exit Strud AI")
@@ -198,9 +200,8 @@ class StrudRenderer:
         table.add_column(style="bold cyan", width=18)
         table.add_column(style="bright_white")
 
-        table.add_row("Model", model_name)
-        table.add_row("Runtime", "LM Studio")
-        table.add_row("Endpoint", base_url)
+        table.add_row("Assistant", ASSISTANT_NAME)
+        table.add_row("Mode", "Local / Offline • No cloud")
         table.add_row("LLM Status", f"[green]✓ Connected[/green]" if llm_available else f"[red]✗ Disconnected[/red]")
         
         table.add_row("", "")
@@ -208,6 +209,8 @@ class StrudRenderer:
         page_count = retriever_status.get("page_count", 0)
         chunk_count = retriever_status.get("chunk_count", retriever_status.get("chunks", 0))
         tfidf_ok = retriever_status.get("tfidf_available", False)
+        bm25_ok = retriever_status.get("bm25_available", False)
+        retrieval_mode = retriever_status.get("retrieval_mode", "tfidf_dense")
         semantic_ok = retriever_status.get("semantic_available", False)
         gate = retriever_status.get("grounding_threshold", 0.55)
 
@@ -215,8 +218,10 @@ class StrudRenderer:
         table.add_row("Pages", str(page_count))
         table.add_row("Indexed Chunks", str(chunk_count))
         table.add_row("TF-IDF Search", f"[green]✓ Active[/green]" if tfidf_ok else f"[red]✗ Inactive[/red]")
+        table.add_row("BM25 Search", f"[green]✓ Active[/green]" if bm25_ok else "[dim]○ Disabled / Off[/dim]")
+        table.add_row("Policy", "BM25 + TF-IDF + Semantic" if bm25_ok else "TF-IDF + Semantic")
         table.add_row("Semantic Index", f"[green]✓ Active[/green]" if semantic_ok else f"[dim]○ Disabled / Off[/dim]")
-        table.add_row("Grounding Gate", f"{gate:.2f}")
+        table.add_row("Grounding Gate", f"{gate:.2f} · {retrieval_mode}")
 
         # Vision (Qwen3-VL) status
         table.add_row("", "")
@@ -227,13 +232,12 @@ class StrudRenderer:
             vision = {}
 
         if vision.get("vision_enabled"):
-            table.add_row("Vision Model", f"{vision.get('vision_model', 'qwen/qwen3-vl-8b')}")
             if vision.get("vision_model_loaded"):
-                table.add_row("Vision Status", "[green]\u2713 Loaded[/green]")
+                table.add_row("Vision", "[green]\u2713 Available[/green]")
             elif vision.get("lm_studio_reachable"):
-                table.add_row("Vision Status", "[gold1]\u26a0 Not loaded in LM Studio[/gold1]")
+                table.add_row("Vision", "[gold1]\u26a0 Visual engine not loaded[/gold1]")
             else:
-                table.add_row("Vision Status", "[red]\u2717 Unreachable[/red]")
+                table.add_row("Vision", "[red]\u2717 Unreachable[/red]")
             table.add_row("Cached Analyses", str(vision.get("cached_analyses", 0)))
             table.add_row("Visual Chunks", str(vision.get("visual_chunk_count", 0)))
         else:

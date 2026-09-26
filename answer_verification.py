@@ -19,6 +19,8 @@ from config import (
     ASSISTANT_NAME,
 )
 
+from answer_intelligence import find_repeated_phrases, find_filler_phrases
+
 
 # ============================================================
 # CHECK RESULTS
@@ -32,6 +34,7 @@ class VerificationReport:
     no_unsupported_citations: bool = True
     no_text_only_claims: bool = True
     appropriate_level: bool = True
+    no_repetition: bool = True
     issues: list[str] = field(default_factory=list)
 
     @property
@@ -43,6 +46,7 @@ class VerificationReport:
             and self.no_unsupported_citations
             and self.no_text_only_claims
             and self.appropriate_level
+            and self.no_repetition
         )
 
 
@@ -97,9 +101,10 @@ class VerificationService:
         answer: str,
         retrieved_pages: Optional[set[int]] = None,
         has_visual_evidence: bool = False,
+        previous_answers: Optional[list[str]] = None,
+        answer_plan=None,
     ) -> VerificationReport:
         report = VerificationReport()
-        retrieved_pages = retrieved_pages or set()
 
         answer = (answer or "").strip()
 
@@ -109,25 +114,76 @@ class VerificationService:
             report.issues.append("Empty answer.")
             return report
 
+        # 0. Turn-format check: when the plan classifies this as a
+        #    SOCIAL turn (reaction to the conversation, not a world
+        #    question), a biology lecture is a plan violation. This
+        #    is checkable deterministically: the answer must stay
+        #    short and must not read like teaching material.
+        if self._is_social_turn(question, answer_plan):
+            social_problems = []
+            if len(answer) > 400:
+                social_problems.append(
+                    f"Answer is {len(answer)} characters; a social "
+                    f"reaction must stay short."
+                )
+            lecture_markers = (
+                "in the context of", "key terms", "key concepts",
+                "in biology,", "refers to", "means that",
+                "is defined as", "let me explain", "for example:",
+                "in simple terms,",
+            )
+            lowered = answer.lower()
+            if any(m in lowered for m in lecture_markers):
+                social_problems.append(
+                    "Answer analyzes or teaches instead of reacting "
+                    "socially."
+                )
+            if social_problems:
+                report.appropriate_level = False
+                report.issues.extend(
+                    ["SOCIAL TURN violation: " + p for p in social_problems]
+                )
+
         # 2. Relevance: answer should be reasonably substantial
         #    and share content words with the question.
-        if len(answer) < 40 and not self._is_short_answer_appropriate(
-            question, answer
+        #
+        # EXCEPT when this is a quiz turn: a tutor asking one question
+        # back shares no content words with "test me on genetics", and
+        # that is exactly right. Flagging it would trigger a revision
+        # that turns the quiz question into a mini-lecture.
+        # Social turns are likewise exempt: a short reaction like
+        # "Glad it hit the mark!" correctly shares no content words
+        # with "HAHAHAHAHA" - punishing that would push the revision
+        # loop into turning the reaction into a biology lecture.
+        in_quiz_turn = self._is_quiz_turn(question)
+        in_social_turn = self._is_social_turn(question, answer_plan)
+
+        if (
+            len(answer) < 40
+            and not in_quiz_turn
+            and not in_social_turn
+            and not (self._is_short_answer_appropriate(question, answer))
         ):
             report.relevance = False
             report.issues.append("Answer is too short to be useful.")
 
-        q_words = self._content_words(question)
-        a_words = self._content_words(answer)
-        if q_words and a_words and not (q_words & a_words):
-            report.relevance = False
-            report.issues.append(
-                "Answer shares no key terms with the question."
-            )
+        if not in_quiz_turn and not in_social_turn:
+            q_words = self._content_words(question)
+            a_words = self._content_words(answer)
+            if q_words and a_words and not (q_words & a_words):
+                report.relevance = False
+                report.issues.append(
+                    "Answer shares no key terms with the question."
+                )
 
         # 3. Citation check: cited pages must exist in retrieved pages.
+        #
+        # retrieved_pages=None -> citations are not being policed for
+        # this answer (no textbook material was offered at all).
+        # retrieved_pages=set() -> the caller explicitly says there is
+        # NO usable evidence, so ANY page citation is fabricated.
         cited = extract_cited_pages(answer)
-        if cited and retrieved_pages:
+        if cited and retrieved_pages is not None:
             fabricated = cited - retrieved_pages
             if fabricated:
                 report.no_unsupported_citations = False
@@ -136,7 +192,30 @@ class VerificationService:
                     f"{sorted(fabricated)}"
                 )
 
-        # 4. Text-only claim check (multimodal bug guard).
+        # 4. Repetition check (scripted-feeling filler).
+        #
+        # A stock opener/closer is fine once; repeating it across
+        # turns is what makes Strud read like a template.
+        # Banned filler phrases must not appear at all - even on first
+        # use - because a one-off stock closer still reads scripted.
+        first_use_filler = find_filler_phrases(answer)
+        if first_use_filler:
+            report.no_repetition = False
+            report.issues.append(
+                "Answer uses banned filler phrase(s): "
+                + ", ".join(sorted(first_use_filler)[:3])
+            )
+
+        if previous_answers:
+            repeated = find_repeated_phrases(answer, previous_answers)
+            if repeated:
+                report.no_repetition = False
+                report.issues.append(
+                    "Answer repeats stock phrase(s) already used in "
+                    "recent turns: " + ", ".join(sorted(repeated)[:3])
+                )
+
+        # 5. Text-only claim check (multimodal bug guard).
         if has_visual_evidence:
             lowered = answer.lower()
             text_only_phrases = [
@@ -176,6 +255,8 @@ class VerificationService:
         has_visual_evidence: bool = False,
         textbook_context: str = "",
         visual_context: str = "",
+        previous_answers: Optional[list[str]] = None,
+        answer_plan=None,
     ) -> tuple[str, VerificationReport]:
         """
         Verifies the answer and revises it at most max_revisions
@@ -188,6 +269,8 @@ class VerificationService:
             answer=answer,
             retrieved_pages=retrieved_pages,
             has_visual_evidence=has_visual_evidence,
+            previous_answers=previous_answers,
+            answer_plan=answer_plan,
         )
 
         if report.passed or not self.enabled or self.llm_client is None:
@@ -216,6 +299,7 @@ class VerificationService:
                 answer=answer,
                 retrieved_pages=retrieved_pages,
                 has_visual_evidence=has_visual_evidence,
+                previous_answers=previous_answers,
             )
 
         return answer, report
@@ -237,6 +321,21 @@ class VerificationService:
         try:
             issue_list = "\n".join(f"- {issue}" for issue in issues)
 
+            social_fix = any(
+                issue.startswith("SOCIAL TURN violation") for issue in issues
+            )
+            social_rule = ""
+            if social_fix:
+                social_rule = (
+                    'This message was a SOCIAL reaction (laughter, slang, '
+                    '"bro", "thanks", confusion about the previous '
+                    'answer) - NOT a biology question. Replace the draft '
+                    'with a short, natural social reply (one or two '
+                    'sentences at most) that responds to the student\'s '
+                    'message. No biology content, no definitions, no '
+                    'analysis of their words, no lesson.\n'
+                )
+
             visual_rule = ""
             if has_visual_evidence:
                 visual_rule = (
@@ -250,12 +349,14 @@ class VerificationService:
                 "An earlier draft of your answer failed internal quality "
                 "checks. Rewrite the answer fixing ONLY the listed "
                 "problems. Keep everything that was correct. Never "
-                "fabricate textbook page numbers or citations.\n"
+                "fabricate textbook page numbers or citations. Do not "
+                "replace removed filler with different filler, and do "
+                "not add an invitation to ask more questions.\n"
                 + visual_rule
             )
 
             user = (
-                f"Question:\n{question}\n\n"
+                f"{social_rule}Question:\n{question}\n\n"
                 f"Draft answer:\n{answer}\n\n"
                 f"Problems found:\n{issue_list}\n"
             )
@@ -306,6 +407,35 @@ class VerificationService:
             lowered.startswith(("hi", "hello", "hey", "thanks"))
             or len(lowered.split()) <= 3
         )
+
+    @staticmethod
+    def _is_social_turn(question: str, answer_plan) -> bool:
+        """
+        True when the internal plan classified this as a social
+        reaction turn. Uses the plan (single source of truth) rather
+        than re-parsing the message.
+        """
+        return (
+            answer_plan is not None
+            and getattr(answer_plan, "notes", "")
+            and str(getattr(answer_plan, "notes", "")).startswith(
+                "SOCIAL TURN"
+            )
+        )
+
+    @staticmethod
+    def _is_quiz_turn(question: str) -> bool:
+        """
+        Detect a tutoring request that EXPECTS a question back.
+
+        Uses the same markers as the answer plan (single source of
+        truth), so a quiz question being asked back is never punished
+        by the relevance check for sharing no content words with
+        "test me".
+        """
+        from answer_intelligence import infer_tutoring_mode
+
+        return infer_tutoring_mode(question) == "quiz"
 
 
 # ============================================================

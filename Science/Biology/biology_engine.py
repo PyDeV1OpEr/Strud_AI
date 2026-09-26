@@ -2,7 +2,11 @@
 
 from typing import Optional
 
-from config import MAX_HISTORY_MESSAGES
+from config import (
+    MAX_HISTORY_MESSAGES,
+    LLM_TEMPERATURE,
+    LLM_CONVERSATIONAL_TEMPERATURE,
+)
 
 from .biology import (
     BiologyMode,
@@ -81,6 +85,8 @@ class BiologyEngine:
         context: str = "",
         mode: BiologyMode = BiologyMode.MIXED,
         visual_context: str | None = None,
+        answer_plan=None,
+        conversation_note: str | None = None,
     ):
 
         history = self.history[
@@ -93,6 +99,8 @@ class BiologyEngine:
             mode=mode,
             history=history,
             visual_context=visual_context,
+            answer_plan=answer_plan,
+            conversation_note=conversation_note,
         )
 
     # ========================================================
@@ -105,6 +113,9 @@ class BiologyEngine:
         context: str = "",
         mode: BiologyMode = BiologyMode.MIXED,
         visual_context: str | None = None,
+        answer_plan=None,
+        conversation_note: str | None = None,
+        conversational: bool = False,
     ) -> str:
 
         question = question.strip()
@@ -117,15 +128,32 @@ class BiologyEngine:
             context=context,
             mode=mode,
             visual_context=visual_context,
+            answer_plan=answer_plan,
+            conversation_note=conversation_note,
         )
 
         # ----------------------------------------------------
-        # Send to LM Studio / LLM client
+        # Send to LM Studio / LLM client.
+        # Purely conversational turns sample a little warmer for
+        # natural variety; grounded teaching stays conservative.
+        # The plan alone decides: short casual/reaction turns are
+        # conversational, everything else is not.
         # ----------------------------------------------------
+
+        plan_is_social = (
+            answer_plan is not None
+            and getattr(answer_plan, "mode", "") == "conversation"
+            and getattr(answer_plan, "depth", "") == "short"
+        )
 
         answer = self.llm_client.chat(
             model=self.model,
             messages=messages,
+            temperature=(
+                LLM_CONVERSATIONAL_TEMPERATURE
+                if (conversational or plan_is_social)
+                else LLM_TEMPERATURE
+            ),
         )
 
         answer = answer.strip()

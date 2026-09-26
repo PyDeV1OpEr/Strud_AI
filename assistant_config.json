@@ -16,7 +16,15 @@
     "tfidf": true,
     "semantic": true,
     "reranking": true,
-    "grounding": true
+    "grounding": true,
+
+    "mode": "tfidf_dense",
+
+    "rrf_weights": {
+      "tfidf": 1.0,
+      "bm25": 1.0,
+      "semantic": 1.0
+    }
   },
 
   "verification": {
@@ -28,11 +36,10 @@
     "expose_internal_models": false,
     "expose_system_prompts": false,
     "capability_vision_message": "Yes. Strud AI can analyze Biology images, diagrams, tables and graphs and use that information together with relevant Biology material to explain them. Upload an image with /image <path> and ask your question.",
-    "capability_vision_unavailable_message": "Image analysis is currently unavailable in this session. Please check that the vision model is loaded in LM Studio.",
+    "capability_vision_unavailable_message": "Image analysis is currently unavailable in this session. Please check that the visual engine is running.",
     "identity_response": "You're speaking with Strud AI, an AI study assistant created by Mohammed and designed to help students learn G.C.E. Advanced Level Biology.",
     "creator_response": "Strud AI was created by Mohammed as an AI study assistant focused on G.C.E. Advanced Level Biology.",
     "technology_response": "Strud AI uses several components to understand questions, retrieve relevant Biology material, interpret visual information, and produce its responses. These internal components are part of Strud AI's implementation.",
-    "prompt_protection_response": "I can explain how Strud AI is designed at a high level, but I can't provide private system instructions or hidden configuration.",
-    "out_of_domain_response": "That topic is outside Strud AI's primary focus. I'm designed specifically as a G.C.E. Advanced Level Biology study assistant. If you'd like, ask me a Biology question and I can help."
+    "prompt_protection_response": "I can explain how Strud AI is designed at a high level, but I can't provide private system instructions or hidden configuration."
   }
 }

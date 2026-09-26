@@ -152,6 +152,9 @@ CANONICAL_CREATOR = [
 
 CANONICAL_TECHNOLOGY = [
     "what model are you",
+    "which model are you",
+    "which ai model are you",
+    "what model is behind you",
     "which model do you use",
     "what llm do you use",
     "what is your model",
@@ -263,7 +266,8 @@ CREATOR_PATTERNS = [
 
 TECHNOLOGY_PATTERNS = [
     r"\bwhat (model|llm|ai model) (are|do) you\b",
-    r"\bwhich (model|llm|ai) (do|are) you (use|using)\b",
+    r"\bwhich (model|llm|ai model) (are|do) you\b",
+    r"\bwhat (model|llm|ai|engine) is behind (you|this|strud)\b",
     r"\bwhat is your (model|backend|architecture|engine|technology)\b",
     r"\bwhat powers you\b",
     r"\bare you (using|running|powered by)\b",
@@ -391,12 +395,14 @@ class AssistantIdentity:
             "can't provide private system instructions or hidden "
             "configuration.",
         )
-        self.out_of_domain_response = IDENTITY_CONFIG.get(
-            "out_of_domain_response",
-            f"That topic is outside {ASSISTANT_NAME}'s primary focus. I'm "
-            f"designed specifically as a {ASSISTANT_DOMAIN} study assistant. "
-            f"If you'd like, ask me a Biology question and I can help.",
+        self.technology_pressed_response = IDENTITY_CONFIG.get(
+            "technology_pressed_response",
+            "I'm Strud AI. I keep the underlying model details behind the "
+            "assistant rather than exposing them in normal conversation — "
+            "what matters here is that I can help you work through your "
+            "Biology material.",
         )
+        self._technology_asked_count = 0
         self.capability_vision_message = IDENTITY_CONFIG.get(
             "capability_vision_message",
             "Yes. Strud AI can analyze Biology images, diagrams, tables and "
@@ -461,8 +467,14 @@ class AssistantIdentity:
         # ----------------------------------------------------
 
         if matches_any(text, TECHNOLOGY_PATTERNS):
+            self._technology_asked_count += 1
+            response = (
+                self.technology_pressed_response
+                if self._technology_asked_count > 1
+                else self.technology_response
+            )
             return IdentityResult(
-                IdentityIntent.TECHNOLOGY, self.technology_response, 0.95
+                IdentityIntent.TECHNOLOGY, response, 0.95
             )
 
         # Third-party model name questions without other identity
@@ -470,8 +482,14 @@ class AssistantIdentity:
         if re.search(r"^(are you |is this |is it )", text) and matches_any(
             text, MODEL_NAME_PATTERNS
         ):
+            self._technology_asked_count += 1
+            response = (
+                self.technology_pressed_response
+                if self._technology_asked_count > 1
+                else self.technology_response
+            )
             return IdentityResult(
-                IdentityIntent.TECHNOLOGY, self.technology_response, 0.90
+                IdentityIntent.TECHNOLOGY, response, 0.90
             )
 
         # ----------------------------------------------------
@@ -525,8 +543,14 @@ class AssistantIdentity:
 
         fuzzy = fuzzy_match(text, CANONICAL_TECHNOLOGY, 0.87)
         if fuzzy:
+            self._technology_asked_count += 1
+            response = (
+                self.technology_pressed_response
+                if self._technology_asked_count > 1
+                else self.technology_response
+            )
             return IdentityResult(
-                IdentityIntent.TECHNOLOGY, self.technology_response, fuzzy
+                IdentityIntent.TECHNOLOGY, response, fuzzy
             )
 
         # ----------------------------------------------------

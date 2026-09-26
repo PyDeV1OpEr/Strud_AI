@@ -19,6 +19,9 @@ META_FILE = CACHE_DIR / "metadata.json"
 SEMANTIC_FILE = CACHE_DIR / "semantic_embeddings.npy"
 SEMANTIC_META_FILE = CACHE_DIR / "semantic_metadata.json"
 
+# BM25 sparse lexical index (Phase 1 hybrid retrieval)
+BM25_FILE = CACHE_DIR / "bm25.pkl"
+
 # Vision / Qwen3-VL
 VISION_CONFIG_FILE = BASE_DIR / "vision_config.json"
 VISION_CACHE_FILE = CACHE_DIR / "vision_cache.json"
@@ -104,6 +107,11 @@ LM_STUDIO_BASE_URL = "http://localhost:1234/v1"
 CHAT_ENDPOINT = f"{LM_STUDIO_BASE_URL}/chat/completions"
 
 LLM_TEMPERATURE = 0.2
+
+# Slightly livelier sampling for casual/social conversational turns
+# (laughter, small talk, reactions). Grounded teaching answers keep
+# LLM_TEMPERATURE for factual stability.
+LLM_CONVERSATIONAL_TEMPERATURE = 0.55
 
 LLM_MAX_TOKENS = 2000
 
@@ -217,7 +225,19 @@ MAX_CHUNKS_PER_PAGE = 2
 
 # Minimum confidence required before Strud claims that
 # the answer is grounded in the Biology Resource Book.
-GROUNDING_THRESHOLD = 0.55
+#
+# 0.55 -> 0.36 (Phase 3, measured):
+#   The grounding gate is now the FIRST filter, not the last. It used
+#   to carry the whole burden of rejecting off-topic questions, which
+#   forced it high (0.55) and made it reject real textbook questions
+#   whose lexical/dense legs disagree (mitochondria, chlorophyll).
+#   With the evidence-sufficiency layer behind it, the gate can be
+#   lenient again: it only decides "is there material worth judging",
+#   and sufficiency decides "can we actually ground an answer on it".
+#   Measured on tests/benchmark_grounding.py: supported-question
+#   accuracy 73% -> 96%, while unsupported-probe rejection improved
+#   to 100% (was 25%).
+GROUNDING_THRESHOLD = 0.36
 
 
 # ============================================================
@@ -225,6 +245,75 @@ GROUNDING_THRESHOLD = 0.55
 # ============================================================
 
 RRF_K = 60
+
+
+# ============================================================
+# BM25 (SPARSE LEXICAL RETRIEVAL)
+# ============================================================
+#
+# BM25 runs ALONGSIDE the existing TF-IDF leg. It is never used
+# to replace the current path unless the retrieval mode below
+# selects the hybrid pipeline.
+
+BM25_TOP_K = 20
+
+# Standard BM25 saturation / length-normalisation parameters.
+BM25_K1 = 1.5
+
+BM25_B = 0.75
+
+# Raw BM25 scores are unbounded. These two bounds convert a raw
+# BM25 score into a 0..1 "lexical quality" estimate, exactly like
+# TFIDF_MIN_QUALITY / TFIDF_MAX_QUALITY do for TF-IDF.
+#
+# Calibrated empirically on the Biology Resource Book
+# (see tests/benchmark_retrieval.py).
+
+BM25_MIN_QUALITY = 4.0
+
+BM25_MAX_QUALITY = 22.0
+
+
+# ============================================================
+# RETRIEVAL MODE (Phase 1)
+# ============================================================
+#
+#   "tfidf_dense" -> existing pipeline: TF-IDF + MiniLM (RRF)
+#   "hybrid"      -> add BM25 as an additional ranked list (RRF)
+#
+# Configured from assistant_config.json -> retrieval.mode
+
+_RETRIEVAL_CONFIG = ASSISTANT_CONFIG.get("retrieval", {})
+if not isinstance(_RETRIEVAL_CONFIG, dict):
+    _RETRIEVAL_CONFIG = {}
+
+RETRIEVAL_MODE = str(
+    _RETRIEVAL_CONFIG.get("mode", "tfidf_dense")
+).strip().lower()
+
+if RETRIEVAL_MODE not in ("tfidf_dense", "hybrid"):
+    RETRIEVAL_MODE = "tfidf_dense"
+
+# BM25 leg active?
+BM25_ENABLED = RETRIEVAL_MODE == "hybrid"
+
+# Default per-list weights inside Reciprocal Rank Fusion.
+# 1.0 keeps every leg equal to how it behaved before BM25 existed.
+RRF_WEIGHTS = {
+    "tfidf": 1.0,
+    "bm25": 1.0,
+    "semantic": 1.0,
+}
+
+_config_weights = _RETRIEVAL_CONFIG.get("rrf_weights")
+if isinstance(_config_weights, dict):
+    for _key in ("tfidf", "bm25", "semantic"):
+        try:
+            RRF_WEIGHTS[_key] = float(
+                _config_weights.get(_key, RRF_WEIGHTS[_key])
+            )
+        except (TypeError, ValueError):
+            pass
 
 
 # ============================================================
@@ -248,13 +337,55 @@ NEIGHBOR_PAGE_PENALTY = 0.82
 # These are NOT the grounding threshold.
 # The final grounding confidence is calculated separately.
 
-TFIDF_MIN_QUALITY = 0.03
+# Phase 3 recalibration (measured on the live index):
+# the strongest raw TF-IDF match in this corpus is ~0.30, but well-
+# grounded single-concept questions typically peak at 0.16-0.25. The
+# old 0.30 cap made a 0.16 match look like 49% quality, starving the
+# lexical term of the confidence formula. Similarly, dense cosine
+# tops out around 0.60-0.68 for a direct topic hit (MiniLM), so the
+# 0.70 cap systematically under-credited strong dense matches.
+TFIDF_MIN_QUALITY = 0.02
 
-TFIDF_MAX_QUALITY = 0.30
+TFIDF_MAX_QUALITY = 0.22
 
 SEMANTIC_MIN_QUALITY = 0.25
 
-SEMANTIC_MAX_QUALITY = 0.70
+SEMANTIC_MAX_QUALITY = 0.62
+
+
+# ============================================================
+# EVIDENCE SUFFICIENCY (post-retrieval stage)
+# ============================================================
+#
+# A retrieval/reranking SCORE is not proof of usable evidence.
+# After retrieval (and any future reranking) the sufficiency stage
+# asks: "does this material actually answer the question?"
+#
+# It combines several independent signals (query-term coverage,
+# multi-leg agreement, breadth of supporting chunks, chunk-level
+# relevance) instead of trusting one score.
+
+# Minimum sufficiency score before Strud claims textbook grounding.
+EVIDENCE_SUFFICIENCY_THRESHOLD = 0.60
+
+# Below this score the evidence is treated as unsupported.
+EVIDENCE_PARTIAL_THRESHOLD = 0.40
+
+# IDF-weighted share of the question's distinctive terms that must
+# actually appear in the retrieved evidence.
+EVIDENCE_MIN_TERM_COVERAGE = 0.62
+
+# Number of distinct pages that must independently support the topic.
+EVIDENCE_MIN_SUPPORTING_PAGES = 2
+
+# A missing term whose IDF is at least this fraction of the query's
+# strongest term is treated as a critical gap (the textbook cannot
+# answer the question as asked).
+EVIDENCE_CRITICAL_TERM_RATIO = 0.55
+
+# Lower bound of "this chunk is about the question at all" used when
+# counting independently relevant chunks.
+EVIDENCE_CHUNK_RELEVANCE_FLOOR = 0.45
 
 
 # ============================================================
@@ -263,3 +394,14 @@ SEMANTIC_MAX_QUALITY = 0.70
 
 # Number of previous messages included when building prompts.
 MAX_HISTORY_MESSAGES = 6
+
+# Bounded short-term conversational memory (turns kept for
+# follow-up resolution such as "explain that again" / "why?").
+MAX_MEMORY_TURNS = 8
+
+# A follow-up this short (in words) is treated as context-dependent
+# when it also looks like a follow-up or lacks its own subject.
+FOLLOWUP_MAX_WORDS = 6
+
+# Stop repeating the same closing/opening filler across turns.
+REPETITION_LOOKBACK_TURNS = 6

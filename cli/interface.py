@@ -12,9 +12,20 @@ from typing import Any
 from pathlib import Path
 
 from config import PDF_FILE, LM_STUDIO_BASE_URL, MODEL
-from question_router import route_question, QuestionRoute
+from question_router import QuestionRoute
 from assistant_identity import classify_identity_intent
+from semantic_router import get_semantic_router
 from answer_verification import get_verification_service
+from injection_guard import detect_injection
+from evidence_sufficiency import assess_evidence, describe as describe_evidence
+from answer_intelligence import (
+    ConversationMemory,
+    build_answer_plan,
+    find_repeated_phrases,
+    validation_from_report,
+    to_dict as plan_to_dict,
+    PYDANTIC_AVAILABLE,
+)
 from Science.Biology.biology import BiologyMode
 from Science.Biology.biology_retriever import (
     initialize_retriever,
@@ -77,18 +88,18 @@ class StrudCLI:
             llm_client=llm_client, model=model
         )
 
-    def get_route_label(self, route: QuestionRoute) -> str:
-        """
-        Maps QuestionRoute to user-facing category label.
-        """
-        labels = {
-            QuestionRoute.BIOLOGY: "Biology",
-            QuestionRoute.GENERAL: "General Knowledge",
-            QuestionRoute.META: "About Strud",
-            QuestionRoute.CONVERSATIONAL: "Conversation",
-            QuestionRoute.UNKNOWN: "General Knowledge",
-        }
-        return labels.get(route, "General Knowledge")
+        # Semantic decision layer (LLM-based; never rejects)
+        self.router = get_semantic_router(
+            llm_client=llm_client, model=model
+        )
+
+        # Bounded short-term memory for contextual follow-ups
+        # ("explain that again", "why?") and repetition checks.
+        self.memory = ConversationMemory()
+
+        # Last internal plan/validation (debug only, never shown as JSON)
+        self._last_plan = None
+        self._last_validation = None
 
     def handle_command(self, command: str) -> bool:
         """
@@ -107,6 +118,7 @@ class StrudCLI:
 
         if cmd == "/clear":
             self.engine.clear_history()
+            self.memory.clear()
             self._current_image_path = None
             self._current_image_analysis = None
             self._current_image_concepts = []
@@ -170,17 +182,63 @@ class StrudCLI:
 
     def process_question(self, question: str) -> None:
         """
-        Processes a user question through the full pipeline:
+        Processes a user message through the full pipeline:
 
-        identity/capability interception -> routing ->
-        biology-first retrieval -> visual analysis (when needed)
+        identity interception -> semantic decision layer ->
+        capability-driven workflow (retrieval / vision when useful)
         -> answer generation -> silent verification -> rendering.
+
+        The semantic router decides WHICH capabilities to use.
+        It never rejects: every message reaches the main LLM,
+        which generates the natural response.
         """
+        self._last_route_debug = None
+
         # ------------------------------------------------------
-        # 0. Identity & capability interception (before routing)
+        # 0. Injection detection
+        #
+        # Deterministic, narrow, and BEFORE anything else: genuine
+        # attempts to rewrite instructions, extract the prompt, hijack
+        # the role, or fabricate evidence are not negotiable.
+        # Ordinary conversation is never flagged (see
+        # tests/test_intelligence_upgrade.py).
         # ------------------------------------------------------
 
-        identity = classify_identity_intent(question)
+        injection = detect_injection(question)
+
+        if injection is not None:
+            self._last_route_debug = {
+                "question": question,
+                "route": "injection_guard",
+                "intent": injection.category,
+                "reason": f"matched pattern: {injection.matched}",
+                "retrieval_attempted": False,
+            }
+
+            self.renderer.print_message(injection.message, style="yellow")
+            return
+
+        # ------------------------------------------------------
+        # 0b. Identity & capability interception (before routing)
+        #
+        # When an image is loaded, "what is this?" refers to the
+        # IMAGE, not the assistant — short questions are only
+        # treated as identity questions when they name the
+        # assistant ("you"/"strud").
+        # ------------------------------------------------------
+
+        image_loaded = self._current_image_path is not None
+        if image_loaded:
+            lowered_probe = (question or "").lower()
+            mentions_assistant = any(
+                word in lowered_probe for word in ("you", "strud", "yourself")
+            )
+            identity = (
+                None if not mentions_assistant
+                else classify_identity_intent(question)
+            )
+        else:
+            identity = classify_identity_intent(question)
 
         if identity is not None:
             self._last_route_debug = {
@@ -209,8 +267,8 @@ class StrudCLI:
                 if not status.get("vision_model_loaded"):
                     self.renderer.print_message(
                         "Image analysis is currently unavailable because "
-                        "the vision model is not loaded in LM Studio. "
-                        "Please load it and try again.",
+                        "the visual engine isn't ready in this session. "
+                        "Please start it and try again.",
                         style="yellow",
                     )
                     return
@@ -226,102 +284,215 @@ class StrudCLI:
             self.process_image_question(question)
             return
 
-        # 2. Route question
-        route_result = route_question(question)
-        route = route_result.route
-        route_label = self.get_route_label(route)
-
         # ------------------------------------------------------
-        # 3. Conversational messages (no retrieval needed)
-        # ------------------------------------------------------
-
-        if route == QuestionRoute.CONVERSATIONAL:
-            self._last_route_debug = {
-                "question": question,
-                "route": route.value,
-                "reason": route_result.reason,
-                "retrieval_attempted": False,
-            }
-
-            with self.renderer.thinking("Thinking..."):
-                answer = self.engine.answer(
-                    question=question,
-                    context="",
-                    mode=BiologyMode.GENERAL,
-                )
-
-            self.renderer.print_answer(
-                answer=answer,
-                route_label=route_label,
-                grounded=False,
-            )
-            return
-
-        # ------------------------------------------------------
-        # 4. BIOLOGY-FIRST ROUTING
+        # 2. Semantic decision layer
         #
-        # Every non-conversational question gets a retrieval
-        # attempt BEFORE being treated as general knowledge or
-        # out-of-domain. This prevents Biology questions phrased
-        # in ordinary words ("Why does the heart beat faster
-        # when running?") from being rejected.
+        # One lightweight LLM call: what is the user trying to do,
+        # and which capabilities does the pipeline need?
+        # This NEVER rejects or produces user-facing text.
         # ------------------------------------------------------
 
-        with self.renderer.thinking("Searching Biology Resource Book..."):
-            retrieval = retrieve_biology(question)
+        has_image = self._current_image_path is not None
+
+        with self.renderer.thinking("Understanding your message..."):
+            decision = self.router.decide(
+                message=question,
+                has_image=has_image,
+                recent_history=self.engine.history,
+            )
+
+        route_label = self.get_route_label_from_decision(decision)
 
         self._last_route_debug = {
             "question": question,
-            "route": route.value,
-            "reason": route_result.reason,
-            "retrieval_attempted": True,
-            "grounded": retrieval.grounded,
-            "confidence": retrieval.confidence,
-            "best_page": retrieval.best_page,
-            "pages": sorted({r.page for r in (retrieval.results or [])}),
+            "route": decision.intent,
+            "domain": decision.domain,
+            "normalized_query": decision.normalized_query,
+            "reason": decision.reasoning,
+            "router_source": decision.source,
+            "router_confidence": decision.confidence,
+            "needs_retrieval": decision.needs_retrieval,
+            "needs_vision": decision.needs_vision,
+            "retrieval_attempted": False,
         }
 
-        # 4b. Textbook grounded -> answer from the book
-        if retrieval.grounded:
+        # ------------------------------------------------------
+        # 3. Study/practice requests (quiz me, make questions...)
+        #    Always retrieval-informed.
+        # ------------------------------------------------------
+
+        if decision.intent == "study_request" or (
+            decision.needs_retrieval and decision.intent == "study_request"
+        ):
+            retrieval_query = self.memory.contextual_query(
+                decision.normalized_query or question
+            )
+
+            with self.renderer.thinking("Searching Biology Resource Book..."):
+                retrieval = retrieve_biology(retrieval_query)
+
+            self._last_route_debug.update({
+                "retrieval_attempted": True,
+                "retrieval_query": retrieval_query,
+                "grounded": retrieval.grounded,
+                "pages": sorted({r.page for r in (retrieval.results or [])}),
+            })
+
             return self._answer_grounded(
                 question=question,
                 retrieval=retrieval,
-                route_label=(
-                    route_label
-                    if route in (QuestionRoute.BIOLOGY,)
-                    else "Biology"
-                ),
+                route_label=route_label,
+                decision=decision,
             )
 
         # ------------------------------------------------------
-        # 4c. Retrieval did not ground the question.
-        #     Distinguish Biology (ungrounded) from clearly
-        #     out-of-domain questions.
+        # 4. Retrieval useful -> textbook pipeline
         # ------------------------------------------------------
 
-        if route in (QuestionRoute.GENERAL, QuestionRoute.UNKNOWN):
-            # Out-of-domain: professional redirect to Biology.
-            from config import ASSISTANT_NAME, ASSISTANT_DOMAIN
-            from config import IDENTITY_CONFIG
-
-            message = IDENTITY_CONFIG.get(
-                "out_of_domain_response",
-                f"That topic is outside {ASSISTANT_NAME}'s primary focus. "
-                f"I'm designed specifically as a {ASSISTANT_DOMAIN} study "
-                "assistant. If you'd like, ask me a Biology question and "
-                "I can help.",
+        if decision.needs_retrieval:
+            # Contextual follow-ups ("why are there two divisions?") are
+            # retrieved against the previous topic, not in isolation.
+            retrieval_query = self.memory.contextual_query(
+                decision.normalized_query or question
             )
-            self.renderer.print_message(message, style="cyan")
-            return
 
-        # Biology question but no reliable textbook evidence:
-        # general Biology explanation with an honest note.
-        with self.renderer.thinking("Preparing general Biology explanation..."):
+            with self.renderer.thinking("Searching Biology Resource Book..."):
+                retrieval = retrieve_biology(retrieval_query)
+
+            self._last_route_debug.update({
+                "retrieval_attempted": True,
+                "retrieval_query": retrieval_query,
+                "grounded": retrieval.grounded,
+                "confidence": retrieval.confidence,
+                "best_page": retrieval.best_page,
+                "pages": sorted({r.page for r in (retrieval.results or [])}),
+            })
+
+            return self._answer_grounded(
+                question=question,
+                retrieval=retrieval,
+                route_label=route_label,
+                decision=decision,
+            )
+
+        # ------------------------------------------------------
+        # 5. Everything else: casual conversation, small talk,
+        #    comments, and non-biology messages all reach the
+        #    main LLM, which decides the natural response.
+        #    NO hardcoded rejection anywhere.
+        # ------------------------------------------------------
+
+        plan = build_answer_plan(
+            question=question,
+            decision=decision,
+            assessment=None,
+            has_image=False,
+            memory=self.memory,
+        )
+
+        # Social turns (reactions) get the minimal social prompt;
+        # everything else in this branch uses the general one.
+        is_social = plan.notes.startswith("SOCIAL TURN")
+        answer_mode = (
+            BiologyMode.SOCIAL if is_social else BiologyMode.GENERAL
+        )
+
+        with self.renderer.thinking("Thinking..."):
             answer = self.engine.answer(
                 question=question,
                 context="",
-                mode=BiologyMode.GENERAL,
+                mode=answer_mode,
+                answer_plan=plan,
+                conversation_note=self.memory.context_note(),
+                conversational=(
+                    decision.intent
+                    in ("casual_conversation", "social_reaction")
+                ),
             )
+
+        answer, validation = self._verify(
+            question=question,
+            answer=answer,
+            retrieved_pages=None,
+            has_visual_evidence=False,
+            textbook_context="",
+            visual_context="",
+            assessment=None,
+            grounded=False,
+            answer_plan=plan,
+        )
+
+        self._last_plan = plan
+        self._remember(question, answer)
+
+        self.renderer.print_answer(
+            answer=answer,
+            route_label=route_label,
+            grounded=False,
+        )
+
+    def get_route_label_from_decision(self, decision) -> str:
+        """
+        Maps a RouteDecision to a user-facing category label.
+        """
+        if decision.is_about_assistant:
+            return "About Strud"
+        if decision.domain == "biology":
+            return "Biology"
+        if decision.intent in ("casual_conversation", "social_reaction"):
+            return "Conversation"
+        if decision.domain == "assistant":
+            return "About Strud"
+        return "Assistant"
+
+    # ------------------------------------------------------------
+    # INTERNAL HELPERS
+    # ------------------------------------------------------------
+
+    def _verify(
+        self,
+        question: str,
+        answer: str,
+        retrieved_pages: set[int] | None,
+        has_visual_evidence: bool,
+        textbook_context: str,
+        visual_context: str,
+        assessment=None,
+        grounded: bool = False,
+        answer_plan=None,
+    ):
+        """
+        Silent verification + internal validation record.
+
+        previous_answers comes from bounded memory so the repetition
+        check catches a Strud that keeps saying the same filler.
+        Returns (final_answer, validation) where validation is an
+        internal AnswerValidation - never shown to the student.
+        """
+        answer, report = self.verifier.verify_and_revise(
+            question=question,
+            answer=answer,
+            retrieved_pages=retrieved_pages,
+            has_visual_evidence=has_visual_evidence,
+            textbook_context=textbook_context,
+            visual_context=visual_context,
+            previous_answers=list(self.memory.recent_answers),
+            answer_plan=answer_plan,
+        )
+
+        validation = validation_from_report(
+            report,
+            assessment=assessment,
+            grounded=grounded,
+        )
+        self._last_validation = validation
+
+        return answer, validation
+
+    def _remember(self, question: str, answer: str) -> None:
+        """Record this exchange in bounded short-term memory."""
+        self.memory.record_turn("user", question)
+        self.memory.record_turn("assistant", answer)
 
     def _answer_grounded(
         self,
@@ -330,14 +501,41 @@ class StrudCLI:
         route_label: str = "Biology",
         visual_context: str | None = None,
         visual_analyses: list | None = None,
+        decision=None,
     ) -> None:
         """
-        Textbook-grounded answer path:
+        Textbook-informed answer path:
 
-        visual analysis (when needed) -> answer generation ->
-        silent verification -> rendering.
+        evidence sufficiency -> visual analysis (when needed) ->
+        answer plan -> answer generation -> silent verification ->
+        rendering.
+
+        The retrieval SCORE decided which pages were fetched. The
+        sufficiency stage decides separately whether those pages can
+        actually answer the question (Phase 3):
+
+          sufficient   -> TEXTBOOK mode, citations allowed
+          partial      -> MIXED mode, related material, honest gaps
+          insufficient -> GENERAL mode, no textbook claims at all
         """
         visual_analyses = visual_analyses or []
+
+        # ------------------------------------------------------
+        # Evidence sufficiency (post-retrieval, score-independent).
+        # Uses the router's normalized query so misspellings and
+        # slang don't defeat term coverage; the normalized query
+        # carries the user's true meaning.
+        # ------------------------------------------------------
+
+        assessment = assess_evidence(
+            question=(decision.normalized_query or question),
+            retrieval=retrieval,
+            visual_evidence=visual_context or "",
+        )
+
+        self._last_route_debug.update({
+            "evidence": assessment.to_dict(),
+        })
 
         # ------------------------------------------------------
         # Visual detection & analysis (text questions only;
@@ -441,42 +639,92 @@ class StrudCLI:
             }
 
         # ------------------------------------------------------
-        # Answer generation
+        # Answer generation (mode chosen by sufficiency verdict)
         # ------------------------------------------------------
 
+        if assessment.verdict == "sufficient":
+            answer_mode = BiologyMode.TEXTBOOK
+        elif assessment.verdict == "partial":
+            answer_mode = BiologyMode.MIXED
+        else:
+            answer_mode = BiologyMode.GENERAL
+
+        # Unusable textbook material is withheld from the prompt in
+        # GENERAL mode so nothing exists to miscite.
+        context = create_textbook_context(retrieval)
+
+        if answer_mode is BiologyMode.GENERAL:
+            context = ""
+
+        plan = build_answer_plan(
+            question=question,
+            decision=decision,
+            assessment=assessment,
+            has_image=bool(visual_context),
+            memory=self.memory,
+        )
+
         with self.renderer.thinking("Reviewing relevant textbook material..."):
-            context = create_textbook_context(retrieval)
             answer = self.engine.answer(
                 question=question,
                 context=context,
-                mode=BiologyMode.TEXTBOOK,
+                mode=answer_mode,
                 visual_context=visual_context,
+                answer_plan=plan,
+                conversation_note=self.memory.context_note(),
             )
 
         # ------------------------------------------------------
         # Silent verification (never exposed to the student)
         # ------------------------------------------------------
 
-        retrieved_pages_set = {
-            r.page for r in (retrieval.results or [])
-        }
+        if answer_mode is BiologyMode.GENERAL:
+            # No evidence offered: ANY page citation would be fabricated.
+            retrieved_pages_set: set[int] | None = set()
+        else:
+            retrieved_pages_set = {
+                r.page for r in (retrieval.results or [])
+            }
 
-        answer, _report = self.verifier.verify_and_revise(
+        answer, _report = self._verify(
             question=question,
             answer=answer,
             retrieved_pages=retrieved_pages_set,
             has_visual_evidence=bool(visual_context),
             textbook_context=context,
             visual_context=visual_context or "",
+            assessment=assessment,
+            grounded=assessment.sufficient,
         )
 
-        sources = get_source_pages(retrieval)
-        self.renderer.print_answer(
-            answer=answer,
-            route_label=route_label,
-            grounded=True,
-            sources=sources,
+        self._last_plan = plan
+        self._remember(question, answer)
+
+        grounded_output = (
+            assessment.sufficient and _report.no_unsupported_citations
         )
+
+        if grounded_output:
+            sources = get_source_pages(retrieval)
+            self.renderer.print_answer(
+                answer=answer,
+                route_label=route_label,
+                grounded=True,
+                sources=sources,
+            )
+        else:
+            self.renderer.print_answer(
+                answer=answer,
+                route_label=route_label,
+                grounded=False,
+                note=(
+                    "Answered from general Biology knowledge: the "
+                    "retrieved textbook material did not cover this "
+                    "question completely enough to ground the answer."
+                )
+                if not assessment.sufficient
+                else None,
+            )
 
     def handle_vision_command(self, argument: str) -> None:
         """
@@ -744,6 +992,7 @@ class StrudCLI:
         """
         analysis = self._current_image_analysis
         concepts = self._current_image_concepts
+        self._last_route_debug = self._last_route_debug or {}
 
         # Retrieval query: question + image concepts
         retrieval_query = f"{question} {' '.join(concepts[:6])}".strip()
@@ -788,7 +1037,27 @@ class StrudCLI:
             "error": None,
         }
 
-        if retrieval.grounded:
+        # Evidence sufficiency also applies to image questions:
+        # relevant pages are not automatically answerable pages.
+        assessment = assess_evidence(
+            question=question,
+            retrieval=retrieval,
+            visual_evidence=visual_context or "",
+        )
+
+        self._last_route_debug.update({
+            "evidence": assessment.to_dict(),
+        })
+
+        plan = build_answer_plan(
+            question=question,
+            decision=None,
+            assessment=assessment,
+            has_image=True,
+            memory=self.memory,
+        )
+
+        if retrieval.grounded and assessment.sufficient:
             with self.renderer.thinking("Reviewing relevant textbook material..."):
                 context = create_textbook_context(retrieval)
                 answer = self.engine.answer(
@@ -796,22 +1065,26 @@ class StrudCLI:
                     context=context,
                     mode=BiologyMode.TEXTBOOK,
                     visual_context=visual_context,
+                    answer_plan=plan,
+                    conversation_note=self.memory.context_note(),
                 )
 
-            # Silent verification (visual evidence active)
             retrieved_pages_set = {
                 r.page for r in (retrieval.results or [])
             }
-            answer, _report = self.verifier.verify_and_revise(
+            answer, _report = self._verify(
                 question=question,
                 answer=answer,
                 retrieved_pages=retrieved_pages_set,
                 has_visual_evidence=True,
                 textbook_context=context,
                 visual_context=visual_context or "",
+                assessment=assessment,
+                grounded=True,
             )
 
             sources = get_source_pages(retrieval)
+            self._remember(question, answer)
             self.renderer.print_answer(
                 answer=answer,
                 route_label="Biology",
@@ -825,18 +1098,23 @@ class StrudCLI:
                     context="",
                     mode=BiologyMode.GENERAL,
                     visual_context=visual_context,
+                    answer_plan=plan,
+                    conversation_note=self.memory.context_note(),
                 )
 
-            # Silent verification (visual evidence active)
-            answer, _report = self.verifier.verify_and_revise(
+            # No textbook evidence: any page citation is fabricated.
+            answer, _report = self._verify(
                 question=question,
                 answer=answer,
-                retrieved_pages=None,
+                retrieved_pages=set(),
                 has_visual_evidence=True,
                 textbook_context="",
                 visual_context=visual_context or "",
+                assessment=assessment,
+                grounded=False,
             )
 
+            self._remember(question, answer)
             self.renderer.print_answer(
                 answer=answer,
                 route_label="Biology",
@@ -878,6 +1156,60 @@ class StrudCLI:
             lines.append(f"Confidence: {debug.get('confidence', 0):.2f}")
             lines.append(f"Best page: {debug.get('best_page') or '\u2014'}")
             lines.append(f"Pages: {debug.get('pages') or []}")
+
+            if debug.get("retrieval_query"):
+                lines.append(
+                    f"Retrieval query: {str(debug.get('retrieval_query'))[:120]}"
+                )
+
+            evidence = debug.get("evidence")
+            if evidence:
+                lines.append(
+                    "Evidence: "
+                    f"{evidence.get('verdict', '\u2014')} "
+                    f"(score {evidence.get('score', 0):.2f}, "
+                    f"coverage {evidence.get('signals', {}).get('term_coverage', 0):.2f}, "
+                    f"pages {evidence.get('supporting_pages', [])[:5]})"
+                )
+                if evidence.get("missing_terms"):
+                    lines.append(
+                        "Missing terms: "
+                        + ", ".join(evidence.get("missing_terms")[:8])
+                    )
+                if evidence.get("critical_gap"):
+                    lines.append(
+                        "Critical gap: "
+                        + ", ".join(
+                            evidence.get("signals", {}).get(
+                                "critical_terms", []
+                            )[:5]
+                        )
+                    )
+
+        plan = self._last_plan
+        if plan is not None:
+            plan_dict = plan_to_dict(plan) if not isinstance(plan, dict) else plan
+            lines.append(
+                "Plan: "
+                f"mode={plan_dict.get('mode', '?')} "
+                f"depth={plan_dict.get('depth', '?')} "
+                f"tone={plan_dict.get('tone', '?')} "
+                f"tutoring={plan_dict.get('tutoring_mode', 'none')}"
+            )
+
+        validation = self._last_validation
+        if validation is not None:
+            val_dict = (
+                plan_to_dict(validation)
+                if not isinstance(validation, dict)
+                else validation
+            )
+            lines.append(
+                "Validation: "
+                f"citations_valid={val_dict.get('citations_valid', '?')} "
+                f"answered={val_dict.get('answered_question', '?')} "
+                f"issues={len(val_dict.get('issues', []) or [])}"
+            )
 
         self.renderer.console.print()
         self.renderer.console.print(
@@ -1016,12 +1348,12 @@ class StrudCLI:
 
         if not llm_connected:
             self.renderer.print_error(
-                "Could not connect to LM Studio.\n\n"
+                "Could not connect to the local engine.\n\n"
                 "Please check:\n"
-                "  1. LM Studio is running\n"
-                "  2. Model 'openai/gpt-oss-20b' is loaded\n"
-                "  3. Local server is active on http://localhost:1234/v1",
-                title="LM Studio Connection Failed",
+                "  1. The local engine server is running\n"
+                "  2. A model is loaded\n"
+                "  3. The local server is active on http://localhost:1234/v1",
+                title="Connection Failed",
             )
             return
 
