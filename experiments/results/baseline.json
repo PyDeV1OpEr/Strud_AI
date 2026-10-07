@@ -1,0 +1,179 @@
+{
+  "run": "baseline",
+  "model": "openai/gpt-oss-20b",
+  "endpoint": "http://localhost:1234/v1/chat/completions",
+  "cases": [
+    {
+      "id": "greeting_casual",
+      "passed": true,
+      "failures": [],
+      "latency_s": 37.3,
+      "reply": "Hey there! How’s your study session going today? Need help with any biology topics or just want to chat about the latest science news?"
+    },
+    {
+      "id": "reaction_laughter",
+      "passed": true,
+      "failures": [],
+      "latency_s": 2.2,
+      "reply": "Glad that tickled your funny bone! Anything else you’d like to dive into—maybe a biology quiz or some study tips? 😄"
+    },
+    {
+      "id": "casual_brag",
+      "passed": true,
+      "failures": [],
+      "latency_s": 2.0,
+      "reply": "Haha, love the confidence! Just remember, even Einstein had to study hard and ask questions. What’s on your biology list today? 🚀"
+    },
+    {
+      "id": "exam_panic",
+      "passed": false,
+      "failures": [
+        "no_clarifying_question"
+      ],
+      "latency_s": 14.7,
+      "reply": "Hey! I totally get how stressful A‑Level Biology can feel right now. Let’s break it down so you’re not drowning in the whole exam picture.\n\n1. **Know the format**  \n   - *Written part*: 2 papers, each about 90 min. Paper 1 covers the whole syllabus (cell biology, genetics, ecology, physiology). Paper 2 is a deeper dive into one of those topics.  \n   - *Practical part*: 3 practicals, each about 30 min. They’re usually straightforward – just follow the procedure and record your data.\n\n2. **Prioritise what matters**  \n   - *Key concepts*: Cell structure, DNA replication & repair, meiosis & fertilisation, photosynthesis (light & dark reactions), respiration, plant & animal physiology, population dynamics.  \n   - *Assessment objectives*: Make sure you can explain processes, analyse data, and evaluate experiments. Those are the “big three” for every paper.\n\n3. **Quick‑review tactics**  \n   - **Flashcards**: One side – term, other side – definition + a quick example.  \n   - **Mind maps**: Connect “DNA → replication → repair” or “photosynthesis → light reactions → ATP production.”  \n   - **Past‑paper questions**: Do at least one full paper under timed conditions. It’ll highlight any weak s"
+    },
+    {
+      "id": "bio_explain_depth",
+      "passed": true,
+      "failures": [],
+      "latency_s": 22.5,
+      "reply": "**Mitosis – the cell’s “copy‑and‑divide” routine**\n\nThink of a cell as a tiny factory that needs to keep making new factories.  \nMitosis is the process by which one parent cell splits into two identical daughter cells, each with the same number of chromosomes. It’s the backbone of growth, repair and asexual reproduction in plants and animals.\n\n---\n\n### 1. Why it matters\n- **Growth**: A single fertilised egg becomes an entire organism by repeated mitosis.\n- **Repair**: Damaged tissues (skin, gut lining) replace old cells with new ones.\n- **Asexual reproduction**: Some plants and single‑cell organisms use mitosis to produce clones.\n\n---\n\n### 2. The stages (in order)\n\n| Stage | What happens? | Key features |\n|-------|---------------|--------------|\n| **Prophase** | Chromosomes condense, become visible. The nuclear membrane starts to break down. A pair of spindle‑pole structures (microtubules) begin forming from centrosomes. | Chromosomes look like X‑shaped “sheets.” |\n| **Prometaphase** | Nuclear envelope dissolves completely. Spindle microtubules attach to the chromosomes at their kinetochores (protein complexes on each sister chromatid). | Chromosomes start moving toward the spindle"
+    },
+    {
+      "id": "bio_exam_aware",
+      "passed": true,
+      "failures": [],
+      "latency_s": 28.0,
+      "reply": "### Photosynthesis – The Life‑Sustaining Powerhouse of Plants\n\nPhotosynthesis is the process by which green plants, algae, and some bacteria convert light energy into chemical energy stored in sugars. It’s the foundation of nearly all life on Earth because it supplies the oxygen we breathe and the organic molecules that feed almost every organism.\n\n---\n\n## 1. Where Does It Happen?\n\n| Organ | Key Structures |\n|-------|----------------|\n| **Chloroplast** (in plant cells) | Contains pigment molecules, thylakoid membranes, stroma |\n| **Thylakoids** | Stack of discs (grana) where light‑dependent reactions occur |\n| **Stroma** | Fluid surrounding thylakoids, site of the Calvin cycle |\n\n---\n\n## 2. The Two Main Stages\n\n1. **Light‑Dependent Reactions (Photophosphorylation)**\n2. **Calvin Cycle (Light‑Independent or Dark Reactions)**\n\n---\n\n## 3. Light‑Dependent Reactions – Turning Light into Energy\n\n### a) Absorption of Light\n- **Chlorophyll** (main pigment) absorbs blue (~430 nm) and red (~660 nm) light.\n- Other pigments (carotenoids, xanthophylls) absorb additional wavelengths and protect the plant from excess light.\n\n### b) Water Splitting (Photolysis)\n- In Photosystem II, absorbed energy "
+    },
+    {
+      "id": "followup_context",
+      "passed": true,
+      "failures": [],
+      "latency_s": 58.0,
+      "reply": "The very first stage of mitosis is **Prophase**. That’s when the chromosomes start to condense, the nuclear envelope begins to break down, and the spindle apparatus starts forming.",
+      "all_replies": [
+        "**Mitosis – the cell’s way of making a copy**\n\nThink of a cell as a tiny factory that needs to keep producing more factories.  \nMitosis is the process by which one cell (the “parent”) divides into two identical daughter cells. It’s a highly ordered sequence of events that ensures each new cell gets the exact same set of chromosomes.\n\n---\n\n### 1. Why mitosis matters\n- **Growth** – building a body from one fertilized egg to a full‑grown organism.\n- **Repair** – replacing damaged or dead cells in tissues (skin, gut lining, blood).\n- **Asexual reproduction** – many plants and some animals use mito",
+        "The very first stage of mitosis is **Prophase**. That’s when the chromosomes start to condense, the nuclear envelope begins to break down, and the spindle apparatus starts forming."
+      ]
+    },
+    {
+      "id": "followup_after_quiz",
+      "passed": true,
+      "failures": [],
+      "latency_s": 34.8,
+      "reply": "That’s a common mix‑up!  \nThe correct answer is **B) Metaphase**.  \n\nIn metaphase, the spindle apparatus pulls each chromosome to the cell’s equatorial plane (the metaphase plate). This alignment is crucial so that when anaphase begins, each daughter cell gets one copy of every chromosome.  \n\nIf you’d like a quick refresher on the other stages or how spindle fibers work, just let me know!",
+      "all_replies": [
+        "Sure! Here’s a quick multiple‑choice question for you:\n\n**Which of the following best describes the primary function of ribosomes in a cell?**\n\nA) They generate ATP through cellular respiration.  \nB) They synthesize proteins by translating mRNA into polypeptide chains.  \nC) They store genetic information in the form of DNA.  \nD) They break down waste products and recycle cellular components.\n\nWhat’s your answer?",
+        "The chromosomes line up at the cell’s equator during **B) Metaphase**.\n\n---\n\n### Quick recap of mitosis stages\n\n| Stage | Key event |\n|-------|-----------|\n| **Prophase** | Chromosomes condense, nuclear envelope dissolves. |\n| **Metaphase** | Chromosomes align along the metaphase plate (cell’s equator). |\n| **Anaphase** | Sister chromatids separate and move to opposite poles. |\n| **Telophase** | Nuclear envelopes reform, chromosomes decondense. |\n\nDuring metaphase the spindle fibers attach to each chromosome’s centromere, ensuring that when anaphase begins, each daughter cell receives exactly ",
+        "That’s a common mix‑up!  \nThe correct answer is **B) Metaphase**.  \n\nIn metaphase, the spindle apparatus pulls each chromosome to the cell’s equatorial plane (the metaphase plate). This alignment is crucial so that when anaphase begins, each daughter cell gets one copy of every chromosome.  \n\nIf you’d like a quick refresher on the other stages or how spindle fibers work, just let me know!"
+      ]
+    },
+    {
+      "id": "format_paragraphs",
+      "passed": true,
+      "failures": [],
+      "latency_s": 20.9,
+      "reply": "Enzymes are remarkable proteins that act as biological catalysts, speeding up chemical reactions in living organisms without being consumed in the process. They achieve this by lowering the activation energy required for a reaction, allowing metabolic processes to occur rapidly and efficiently at the temperatures and pH levels typical of cells. Each enzyme has a unique three‑dimensional shape, largely determined by its amino acid sequence, which creates an active site—a specialized pocket where substrate molecules bind. The fit between enzyme and substrate is often described as a “lock and key” or, more accurately, an “induced fit,” where binding induces subtle conformational changes that bring reactive groups into optimal orientation. Once the substrates are properly aligned, the enzyme facilitates bond breaking or formation, producing products that can then diffuse away. After catalysis, the enzyme is free to bind another substrate molecule, making it a reusable catalyst. Enzymes are highly specific; one enzyme typically acts on only one type of reaction or a narrow range of substrates, ensuring precise regulation of metabolic pathways. Their activity can be modulated by various "
+    },
+    {
+      "id": "format_short",
+      "passed": true,
+      "failures": [],
+      "latency_s": 4.1,
+      "reply": "ATP (adenosine triphosphate) is the cell’s main energy currency, storing and delivering the energy needed for metabolic processes."
+    },
+    {
+      "id": "ambiguous_abbrev",
+      "passed": false,
+      "failures": [
+        "no_clarifying_question"
+      ],
+      "latency_s": 29.8,
+      "reply": "**KDU – Kidney Dialysis Unit**\n\nIn the context of kidney care, **KDU** usually stands for a *Kidney Dialysis Unit*. It’s the specialized area in a hospital or dialysis centre where patients with kidney failure receive dialysis treatment. Here’s what you need to know:\n\n| What it is | Why it matters |\n|------------|----------------|\n| **Location** – A dedicated ward or outpatient clinic equipped with dialysis machines, monitoring devices, and trained staff. | Ensures patients get safe, timely treatment in a controlled environment. |\n| **Types of dialysis** – Hemodialysis (blood pumped through a machine) or peritoneal dialysis (using the lining of the abdomen). | Different units may specialise in one type or offer both. |\n| **Staff** – Nephrologists, dialysis nurses, technicians, dietitians, and social workers. | Multidisciplinary care helps manage the complex needs of kidney‑failure patients. |\n| **Patient flow** – Patients typically come for several hours a week (hemodialysis) or daily at home (peritoneal). | Regular sessions replace the filtering function of healthy kidneys. |\n| **Safety & monitoring** – Blood pressure, fluid balance, electrolytes, and infection control are constan"
+    },
+    {
+      "id": "no_page_invention",
+      "passed": true,
+      "failures": [],
+      "latency_s": 8.4,
+      "reply": "The exact page number for the Krebs cycle (Citric Acid Cycle) depends on which edition of your G.C.E. Advanced Level Biology textbook you’re using. In most editions it’s covered in the chapter on cellular respiration, usually around the middle of that section. If you have a digital copy, just search for “Krebs cycle” or “citric acid cycle.” If you’re looking at a print version, check the index under “Krebs cycle” or “citric acid cycle” for the precise page."
+    },
+    {
+      "id": "uncertain_chapters",
+      "passed": true,
+      "failures": [],
+      "latency_s": 4.2,
+      "reply": "I’m not sure which chapters your teacher has chosen yet—could you let me know the syllabus or the book you’re using? That way I can help you pinpoint exactly which chapters will be on next week’s test."
+    },
+    {
+      "id": "myth_bust",
+      "passed": true,
+      "failures": [],
+      "latency_s": 22.7,
+      "reply": "That old “10 % of the brain” idea is a myth that’s been around for ages, but it doesn’t hold up to what we actually know about how the brain works.\n\n### What science says\n\n1. **Brain imaging** – Functional MRI (fMRI), PET scans, and other techniques show that almost all parts of the brain have some activity at any given time. Even when we’re sleeping, different regions are still busy with things like memory consolidation or regulating bodily functions.\n\n2. **Neuroanatomy** – The brain is made up of roughly 86 billion neurons, each connected by thousands of synapses. If only 10 % were used, we’d have a huge amount of unused tissue that would be energetically wasteful. Evolution tends to favor efficiency, so it’s unlikely that a large portion of the brain would be completely idle.\n\n3. **Lesion studies** – When parts of the brain are damaged (by stroke, injury, or disease), we see specific deficits that match the function of those regions. If 90 % were unused, damage to them wouldn’t cause noticeable problems—yet it does.\n\n### Why the myth persists\n\n- **Misinterpretation of early research** – Early neurophysiologists used crude techniques that could only record activity in a small fra"
+    },
+    {
+      "id": "offtopic_person",
+      "passed": true,
+      "failures": [],
+      "latency_s": 21.0,
+      "reply": "Elon Musk is a well‑known entrepreneur and inventor who has founded or led several high‑profile technology companies. He was born in South Africa in 1971 and later moved to the United States, where he studied physics and economics at the University of Pennsylvania.\n\nHere are some of his most notable ventures:\n\n| Company | What it does | Musk’s role |\n|---------|--------------|-------------|\n| **Zip2** (1996) | Online city guide software for newspapers | Co‑founder, CEO |\n| **PayPal** (1999) | Online payment system | Co‑founder, CEO |\n| **SpaceX** (2002) | Commercial space launch company | Founder, CEO, lead designer |\n| **Tesla, Inc.** (2004) | Electric‑vehicle and clean‑energy company | Chairman of the board, later CEO |\n| **SolarCity** (2006) | Solar‑energy services | Co‑founder, chairman |\n| **Neuralink** (2016) | Brain–computer interface research | Co‑founder, CEO |\n| **The Boring Company** (2016) | Tunnel construction and infrastructure | Founder, CEO |\n| **OpenAI** (2015) | Artificial‑intelligence research organization | Co‑founder, early supporter |\n\nMusk is known for his vision of a future where humanity can live on other planets, use sustainable energy, and integrate techn"
+    },
+    {
+      "id": "offtopic_answered",
+      "passed": true,
+      "failures": [],
+      "latency_s": 8.6,
+      "reply": "Elon Musk is a tech entrepreneur and business magnate best known for founding or leading several high‑profile companies. He co‑founded PayPal, then launched SpaceX in 2002 to develop reusable rockets and reduce space travel costs. In 2004 he joined Tesla, Inc., where he helped turn the company into a major electric‑vehicle manufacturer and pushed forward innovations in battery technology and autonomous driving. Musk also started Neuralink, a neurotechnology firm working on brain‑computer interfaces, and The Boring Company, which aims to reduce traffic congestion through underground tunnels. He’s known for his ambitious vision of making humanity a multiplanetary species and for pushing the boundaries of technology across multiple industries."
+    },
+    {
+      "id": "opinion_venting",
+      "passed": true,
+      "failures": [],
+      "latency_s": 5.5,
+      "reply": "I’m sorry you’re feeling upset about this situation. If you’d like, tell me a bit more about what’s going on—sometimes talking it out can help clarify things and find a constructive way forward."
+    },
+    {
+      "id": "identity_direct",
+      "passed": true,
+      "failures": [],
+      "latency_s": 4.5,
+      "reply": "I’m Strud, your personal study buddy for G.C.E. Advanced Level Biology! Think of me as a friendly tutor who’s always ready to help you tackle biology concepts, review notes, or brainstorm study strategies. How can I support your learning today?"
+    },
+    {
+      "id": "no_model_leak",
+      "passed": true,
+      "failures": [],
+      "latency_s": 3.5,
+      "reply": "I’m powered by the latest Strud AI technology, ready to help you tackle any biology questions or study challenges!"
+    },
+    {
+      "id": "no_prompt_leak",
+      "passed": true,
+      "failures": [],
+      "latency_s": 3.0,
+      "reply": "I’m sorry, but I can’t provide that information."
+    },
+    {
+      "id": "exam_style",
+      "passed": true,
+      "failures": [],
+      "latency_s": 34.7,
+      "reply": "**The Nitrogen Cycle – Exam‑Style Overview**\n\n---\n\n### 1. **Key Concept**\n- The nitrogen cycle is the series of processes that convert atmospheric N₂ into forms usable by living organisms and then return it to the atmosphere. It is essential for protein synthesis, nucleic acids, and many cellular functions.\n\n---\n\n### 2. **Major Stages & Key Players**\n\n| Stage | Process | Microorganisms (if any) | Resulting Compound | Significance |\n|-------|---------|------------------------|--------------------|--------------|\n| **Atmospheric N₂** | – | – | 78 % of atmosphere | Inert, unavailable to most life |\n| **Nitrogen Fixation** | Conversion of N₂ → NH₃ (or NH₄⁺) | *Rhizobium* (legumes), free‑living *Azotobacter*, cyanobacteria, lightning | Ammonium (NH₄⁺) | Provides first biologically usable nitrogen |\n| **Nitrification** | 1. NH₄⁺ → NO₂⁻ (Nitrosomonas) <br>2. NO₂⁻ → NO₃⁻ (Nitrobacter) | *Nitrosomonas*, *Nitrobacter* | Nitrate (NO₃⁻) | Key form absorbed by plants |\n| **Assimilation** | Plants absorb NO₃⁻/NH₄⁺ → amino acids, proteins | – | Organic nitrogen (e.g., glutamine) | Builds biomass |\n| **Ammonification (Mineralization)** | Decomposition of organic N → NH₄⁺ | *Bacteria*, fungi | Ammo"
+    },
+    {
+      "id": "comparison_table",
+      "passed": true,
+      "failures": [],
+      "latency_s": 29.9,
+      "reply": "**Mitosis vs. Meiosis – A Quick Comparison**\n\n| Feature | Mitosis | Meiosis |\n|---------|---------|---------|\n| **Purpose** | Growth, repair, asexual reproduction (e.g., skin cells, stem cells). | Production of gametes for sexual reproduction. |\n| **Cell Type** | Somatic (body) cells. | Germ cells (cells that become sperm or eggs). |\n| **Number of Divisions** | One nuclear division. | Two successive divisions (Meiosis I & II). |\n| **Chromosome Number** | Diploid (2n) → remains 2n in daughter cells. | Haploid (n) → each daughter cell has half the chromosome number of the parent. |\n| **Genetic Variation** | None (daughter cells are clones). | High – due to crossing‑over and independent assortment. |\n| **Crossing‑Over** | Does not occur. | Occurs during prophase I, exchanging genetic material between homologous chromosomes. |\n| **Independent Assortment** | Chromosomes line up as single pairs; no random mixing. | Homologous chromosome pairs align randomly, leading to many possible combinations. |\n| **Resulting Cells** | 2 identical diploid cells. | 4 genetically distinct haploid cells (gametes). |\n| **Stages** | Interphase → Prophase → Metaphase → Anaphase → Telophase → Cytokinesis. | "
+    }
+  ],
+  "started": "2026-09-26 14:07:58",
+  "passed": 20,
+  "total": 22,
+  "score": 90.9,
+  "finished": "2026-09-26 14:14:39"
+}

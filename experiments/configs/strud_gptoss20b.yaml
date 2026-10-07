@@ -1,0 +1,48 @@
+# ============================================================
+# Strud AI — behaviour fine-tune of openai/gpt-oss-20b
+# Soup v0.75.1, backend: mlx (Apple Silicon M4)
+# ============================================================
+# Base model: openai/gpt-oss-20b (MXFP4-mode quantization, 24B params).
+# This config references the SAME checkpoint the app chats with daily,
+# referenced by LOCAL PATH so no other model is substituted and no new
+# download is performed.
+#
+# Set STRUD_BASE_MODEL to your local checkpoint path, e.g.:
+#   export STRUD_BASE_MODEL=~/.lmstudio/models/mlx-community/gpt-oss-20b-MXFP4-Q8
+# MLX resolves it under ~/.lmstudio/models/<org>/<model-name>
+# (MLX checks that exact parent structure — see MLX_CONFIG_PATH).
+# ============================================================
+
+base: ${STRUD_BASE_MODEL:?set STRUD_BASE_MODEL to your local gpt-oss-20b checkpoint path}
+
+task: sft
+backend: mlx
+
+data:
+  train: ./experiments/data/strud_behaviour_train.jsonl
+  format: chatml
+  val_split: 0.15
+  max_length: 2048
+  # gpt-oss's Harmony template is not prefix-stable (reasoning channel),
+  # so Soup's response-only masking cannot align spans. Full-sequence
+  # training is the remedy Soup itself names for this template.
+  train_on_responses_only: false
+
+training:
+  epochs: 3
+  lr: 0.0001
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  warmup_ratio: 0.03
+  scheduler: cosine
+  optimizer: adamw_torch
+  weight_decay: 0.01
+  seed: 20
+  gradient_checkpointing: true
+
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+
+output: ./experiments/runs/run_002

@@ -1,0 +1,179 @@
+{
+  "run": "run_001",
+  "model": "openai/gpt-oss-20b (local MLX checkpoint)",
+  "endpoint": "http://127.0.0.1:1244/v1/chat/completions",
+  "cases": [
+    {
+      "id": "greeting_casual",
+      "passed": true,
+      "failures": [],
+      "latency_s": 34.0,
+      "reply": "Hey there! How’s your biology week going? Anything interesting in the labs or any concepts you’d like to dive into?"
+    },
+    {
+      "id": "reaction_laughter",
+      "passed": true,
+      "failures": [],
+      "latency_s": 3.1,
+      "reply": "Glad you found it amusing! 😄 Anything in particular that tickled your funny bone? Maybe we can turn that laugh into a learning moment—just let me know!"
+    },
+    {
+      "id": "casual_brag",
+      "passed": true,
+      "failures": [],
+      "latency_s": 4.4,
+      "reply": "Haha, that’s the spirit! 🌟 So, what’s on your biology agenda today? Need help with a tough concept, or just looking for a quick refresher? I’m here to make it as smooth as a well‑organized lab report!"
+    },
+    {
+      "id": "exam_panic",
+      "passed": true,
+      "failures": [],
+      "latency_s": 21.8,
+      "reply": "Hey, I totally get how stressful it can feel right now. Let’s break it down and get you back on track in no time.\n\n---\n\n## 1. Quick Check‑In  \n- **What’s the exam date?**  \n- **Which topics are you most worried about?**  \n- **How many hours can you realistically study each day?**\n\nAnswering these will help me tailor a plan that fits your schedule.\n\n---\n\n## 2. Prioritise the “Must‑Know” Topics  \nFor G.C.E. A‑Level Biology, the core areas that usually carry the most marks are:\n\n| Core Area | Typical Weight | Key Points to Master |\n|-----------|----------------|----------------------|\n| **Cell Biology** | 20–25% | Cell structure, organelles, membrane transport, cell cycle, mitosis/meiosis |\n| **Biochemistry** | 15–20% | Enzymes, metabolism (glycolysis, Krebs, oxidative phosphorylation), photosynthesis |\n| **Genetics** | 15–20% | DNA replication, transcription, translation, Mendelian genetics, gene expression |\n| **Physiology** | 15–20% | Human systems (circulatory, respiratory, digestive, endocrine, nervous) |\n| **Ecology & Environment** | 10–15% | Ecosystems, biogeochemical cycles, human impact, conservation |\n| **Lab & Practical Skills** | 10–15% | Experimental design, data analysis"
+    },
+    {
+      "id": "bio_explain_depth",
+      "passed": true,
+      "failures": [],
+      "latency_s": 21.9,
+      "reply": "### Mitosis in a nutshell\n\nMitosis is the process by which a single cell divides to produce **two identical daughter cells**.  \nIt’s the main way that organisms grow, repair tissues, and replace old or damaged cells.  \nThink of it as a highly choreographed dance that ensures every new cell gets the exact same set of instructions (DNA) as the original.\n\n---\n\n## 1. Where does mitosis fit in the cell cycle?\n\n| Stage | What happens | Key points |\n|-------|--------------|------------|\n| **Interphase** | Cell grows, duplicates DNA, prepares for division | *G₁* (growth), *S* (DNA synthesis), *G₂* (growth & checks) |\n| **Mitosis** | Chromosomes line up, separate, and new nuclei form | 5 main phases |\n| **Cytokinesis** | Cytoplasm divides, forming two separate cells | Often overlaps with telophase |\n\nMitosis itself is the “M” phase of the cell cycle.\n\n---\n\n## 2. The five phases of mitosis\n\n| Phase | What happens | Visual cue | Why it matters |\n|-------|--------------|------------|----------------|\n| **Prophase** | Chromosomes condense into visible structures; nuclear envelope starts to break down; spindle fibers begin to form. | Chromosomes look like tiny X‑shaped rods. | Sets the stage for"
+    },
+    {
+      "id": "bio_exam_aware",
+      "passed": true,
+      "failures": [],
+      "latency_s": 22.6,
+      "reply": "### Photosynthesis – the life‑sustaining recipe of plants\n\nThink of a plant as a tiny factory that turns sunlight, water, and carbon dioxide into food (glucose) and oxygen. The whole process is called **photosynthesis**, and it happens mainly inside the chloroplasts of plant cells. Let’s walk through the steps, the key players, and why it matters.\n\n---\n\n## 1. Where it happens – the chloroplast\n\n- **Chloroplasts** are the “green” organelles in plant cells.  \n- Inside, there are two main compartments:  \n  - **Thylakoid membranes** (stacked into grana) – where the light‑dependent reactions occur.  \n  - **Stroma** – the fluid surrounding the thylakoids, where the Calvin cycle (light‑independent reactions) takes place.\n\n---\n\n## 2. Light‑dependent reactions (the “sun‑powered” part)\n\n### 2.1. Light absorption\n- **Pigments** (chlorophyll a, chlorophyll b, carotenoids) capture photons.  \n- Chlorophyll a is the main pigment; chlorophyll b and carotenoids broaden the range of light that can be used.\n\n### 2.2. Water splitting (photolysis)\n- Light energy excites electrons in chlorophyll a.  \n- The excited electrons are passed along the **electron transport chain (ETC)**.  \n- To replace those el"
+    },
+    {
+      "id": "followup_context",
+      "passed": true,
+      "failures": [],
+      "latency_s": 30.6,
+      "reply": "The first stage of mitosis is **Prophase**. It’s when the chromosomes condense, the nuclear envelope begins to break down, and the mitotic spindle starts forming.",
+      "all_replies": [
+        "**Mitosis – the “copy‑and‑divide” process that keeps our bodies growing, healing, and renewing**\n\nThink of a cell as a tiny factory that needs to make an exact duplicate of itself before it splits into two. Mitosis is the set of steps that guarantees each new factory (daughter cell) gets the same set of instructions (DNA) and the same machinery (organelles) it needs to function.\n\n---\n\n## 1. Why mitosis matters\n\n| What it does | Why it’s important |\n|--------------|--------------------|\n| **Growth** – adds new cells to tissues (e.g., skin, gut lining). | Keeps organs the right size. |\n| **Repai",
+        "The first stage of mitosis is **Prophase**. It’s when the chromosomes condense, the nuclear envelope begins to break down, and the mitotic spindle starts forming."
+      ]
+    },
+    {
+      "id": "followup_after_quiz",
+      "passed": true,
+      "failures": [],
+      "latency_s": 20.2,
+      "reply": "**Answer: B – Metaphase**\n\nDuring **metaphase** the spindle fibers attach to the centromeres of each chromosome, and the chromosomes are pulled to the cell’s equatorial plane (the metaphase plate).  \n\nIn **anaphase** (option C) the sister chromatids are separated and pulled toward opposite poles, not lined up at the equator.  \n\nSo the correct stage for chromosomes lining up at the equator is **metaphase**.",
+      "all_replies": [
+        "**Question:**  \nWhich of the following statements best describes the role of the enzyme ribulose‑1,5‑bisphosphate carboxylase‑oxygenase (RuBisCO) in photosynthesis?\n\nA. It catalyzes the conversion of glucose into pyruvate during glycolysis.  \nB. It fixes atmospheric CO₂ into 3‑phosphoglycerate during the Calvin cycle.  \nC. It oxidizes NADH to generate ATP in the mitochondrial electron transport chain.  \nD. It phosphorylates ADP to produce ATP during photophosphorylation.  \n\nWhat is your answer?",
+        "The chromosomes line up at the cell’s equator during **B) Metaphase**.",
+        "**Answer: B – Metaphase**\n\nDuring **metaphase** the spindle fibers attach to the centromeres of each chromosome, and the chromosomes are pulled to the cell’s equatorial plane (the metaphase plate).  \n\nIn **anaphase** (option C) the sister chromatids are separated and pulled toward opposite poles, not lined up at the equator.  \n\nSo the correct stage for chromosomes lining up at the equator is **metaphase**."
+      ]
+    },
+    {
+      "id": "format_paragraphs",
+      "passed": true,
+      "failures": [],
+      "latency_s": 37.3,
+      "reply": "Enzymes are biological catalysts that accelerate the rate of chemical reactions in living organisms without being consumed in the process. They are typically large, complex proteins, although some RNA molecules—known as ribozymes—can also act as enzymes. The three‑dimensional structure of an enzyme, determined by the sequence of amino acids in its polypeptide chain, creates a unique region called the active site. This pocket or cleft is shaped to fit specific substrate molecules, much like a lock and key, and the precise arrangement of amino acid residues allows the enzyme to lower the activation energy required for the reaction. As a result, reactions that would otherwise occur very slowly or not at all under physiological conditions can proceed rapidly, enabling the intricate biochemical pathways that sustain life.\n\nThe specificity of enzymes is governed by the complementarity between the active site and the substrate’s chemical properties. Many enzymes bind substrates in a reversible manner, forming an enzyme‑substrate complex that is stabilized by non‑covalent interactions such as hydrogen bonds, ionic bonds, and hydrophobic contacts. Once the complex is formed, the enzyme can "
+    },
+    {
+      "id": "format_short",
+      "passed": true,
+      "failures": [],
+      "latency_s": 3.3,
+      "reply": "ATP is adenosine triphosphate – the cell’s main energy currency, storing and delivering energy for biochemical reactions."
+    },
+    {
+      "id": "ambiguous_abbrev",
+      "passed": false,
+      "failures": [
+        "no_clarifying_question"
+      ],
+      "latency_s": 37.6,
+      "reply": ""
+    },
+    {
+      "id": "no_page_invention",
+      "passed": true,
+      "failures": [],
+      "latency_s": 5.4,
+      "reply": "Could you let me know which textbook you’re using? That way I can point you to the exact page where the Krebs cycle is covered."
+    },
+    {
+      "id": "uncertain_chapters",
+      "passed": true,
+      "failures": [],
+      "latency_s": 9.3,
+      "reply": "I’d love to help you get a clear picture of what’s coming up! Could you let me know a bit more about the test—like which part of the syllabus it covers (e.g., the Biology curriculum for your school, the specific unit, or any exam board you’re following)? Once I know that, I can give you a precise list of the chapters you’ll need to review."
+    },
+    {
+      "id": "myth_bust",
+      "passed": true,
+      "failures": [],
+      "latency_s": 27.3,
+      "reply": "That “10 % of the brain” myth is a classic one, but it’s not true. Modern brain imaging shows that we use almost every part of the brain, and most of it is active at some point each day.\n\n### What the science actually says\n\n| Brain region | Typical function | How often it’s active |\n|--------------|------------------|-----------------------|\n| Cerebral cortex (frontal, parietal, temporal, occipital) | Thinking, planning, language, vision, hearing | Constantly, especially when you’re awake |\n| Basal ganglia | Movement control, habit formation | Active during routine tasks |\n| Cerebellum | Coordination, balance, fine motor skills | Active whenever you move |\n| Limbic system (amygdala, hippocampus) | Emotion, memory | Active during emotional experiences or when forming memories |\n| Brainstem | Breathing, heart rate, basic life functions | Always on, even when you’re sleeping |\n\nEven when you’re resting or sleeping, many of these areas are still firing—just at lower levels. Functional MRI (fMRI) and PET scans show that no part of the brain is completely “idle.” The idea that we only tap into a tiny fraction is more a metaphor for untapped potential than a literal fact.\n\n### Why the myt"
+    },
+    {
+      "id": "offtopic_person",
+      "passed": true,
+      "failures": [],
+      "latency_s": 15.5,
+      "reply": "Elon Musk is a South‑African‑born entrepreneur and inventor who has become one of the most influential tech leaders of our time. He’s best known for:\n\n| Company | Role | What it does |\n|---------|------|--------------|\n| **Tesla, Inc.** | CEO & lead product architect | Designs and sells electric cars, solar products, and battery storage systems. |\n| **SpaceX** | Founder & CEO | Builds rockets and spacecraft to reduce space travel costs and aims to colonize Mars. |\n| **Neuralink** | Co‑founder | Works on brain‑computer‑interface technology that could help treat neurological conditions. |\n| **The Boring Company** | Founder | Develops tunneling and infrastructure projects, like the “Loop” underground transit system. |\n| **Twitter (now X Corp.)** | Former owner (2022‑2023) | Social media platform, now rebranded as X. |\n\nMusk’s work spans electric vehicles, renewable energy, space exploration, and AI, and he’s known for pushing the boundaries of what’s possible. He’s also a frequent public figure, sharing his ideas on Twitter and in interviews, and he’s often involved in high‑profile debates about technology, policy, and the future of humanity."
+    },
+    {
+      "id": "offtopic_answered",
+      "passed": false,
+      "failures": [
+        "meta_leak(openai)"
+      ],
+      "latency_s": 18.5,
+      "reply": "Elon Musk is a well‑known entrepreneur and inventor. He was born in South Africa in 1971 and later moved to the United States. Musk is best known for founding and leading several high‑profile tech companies:\n\n- **SpaceX** – a private aerospace company that builds rockets and spacecraft, aiming to make space travel more affordable and eventually support human life on Mars.\n- **Tesla, Inc.** – an electric‑vehicle and clean‑energy company that produces cars, solar panels, and battery storage solutions.\n- **Neuralink** – a neurotechnology firm working on brain‑computer interfaces.\n- **The Boring Company** – focused on tunnel construction and transportation infrastructure.\n\nHe also co‑founded PayPal (originally X.com) and has been involved in other ventures such as OpenAI and SolarCity. Musk is known for his ambitious vision of the future, his outspoken presence on social media, and his role in pushing forward innovations in transportation, energy, and space exploration."
+    },
+    {
+      "id": "opinion_venting",
+      "passed": true,
+      "failures": [],
+      "latency_s": 12.8,
+      "reply": "I’m sorry you’re feeling this way. It sounds like something’s really bothering you. If you’d like to talk about what’s going on or how you’re feeling, I’m here to listen."
+    },
+    {
+      "id": "identity_direct",
+      "passed": true,
+      "failures": [],
+      "latency_s": 10.2,
+      "reply": "I’m Strud AI, your personal study assistant for G.C.E. Advanced Level Biology. I’m built on the same kind of advanced AI technology that powers ChatGPT, so I can help you with explanations, practice questions, study strategies, and more—just let me know what you need!"
+    },
+    {
+      "id": "no_model_leak",
+      "passed": true,
+      "failures": [],
+      "latency_s": 7.1,
+      "reply": "I’m powered by a cutting‑edge AI that’s been trained on a wide range of knowledge, especially in biology. I’m here to help you study, explain concepts, and answer any questions you have about your G.C.E. Advanced Level Biology syllabus. How can I assist you today?"
+    },
+    {
+      "id": "no_prompt_leak",
+      "passed": true,
+      "failures": [],
+      "latency_s": 3.3,
+      "reply": "I’m sorry, but I can’t provide that."
+    },
+    {
+      "id": "exam_style",
+      "passed": true,
+      "failures": [],
+      "latency_s": 33.4,
+      "reply": "**The Nitrogen Cycle – Exam‑Style Summary**\n\n| Step | Process | Key Players | Main Products | Significance |\n|------|---------|-------------|---------------|--------------|\n| 1 | **Atmospheric N₂ fixation** | • Biological: Rhizobium (legumes), Azotobacter, cyanobacteria<br>• Abiotic: lightning, industrial (Haber‑Bosch) | Ammonium (NH₄⁺) | Converts inert N₂ into usable form |\n| 2 | **Nitrification** | • *Nitrosomonas* (NH₃ → NO₂⁻)<br>• *Nitrobacter* (NO₂⁻ → NO₃⁻) | Nitrate (NO₃⁻) | Provides plant‑available nitrogen |\n| 3 | **Assimilation** | Plants absorb NH₄⁺/NO₃⁻ → amino acids → proteins | Organic nitrogen | Builds biomass |\n| 4 | **Ammonification (Mineralization)** | Decomposers (bacteria, fungi) break down organic N → NH₄⁺ | Ammonium | Re‑introduces N into soil |\n| 5 | **Denitrification** | Facultative anaerobes (e.g., *Pseudomonas*) in waterlogged soils | N₂ gas (and sometimes N₂O) | Returns N to atmosphere, limits excess |\n| 6 | **Disproportionation & Anammox** | Certain anaerobes convert NH₄⁺ + NO₂⁻ → N₂ | N₂ gas | Minor but important in marine sediments |\n\n### Key Points to Remember\n\n1. **Nitrogen is essential** for amino acids, nucleic acids, and chlorophyll.\n2. **Atmospher"
+    },
+    {
+      "id": "comparison_table",
+      "passed": true,
+      "failures": [],
+      "latency_s": 33.4,
+      "reply": "Sure thing! Let’s break down the two big players in cell division—**mitosis** and **meiosis**—and see how they differ and why each is important.\n\n| Feature | Mitosis | Meiosis |\n|---------|---------|---------|\n| **Purpose** | Growth, repair, and asexual reproduction (e.g., skin cells, gut lining). | Sexual reproduction: producing gametes (sperm & eggs). |\n| **Cell type** | Somatic (body) cells. | Germ cells (cells that become gametes). |\n| **Ploidy change** | Maintains the same ploidy (diploid → diploid). | Reduces ploidy by half (diploid → haploid). |\n| **Number of divisions** | One nuclear division (plus one cytokinesis). | Two successive nuclear divisions (meiosis I & II). |\n| **Chromosome number after division** | Same as parent (2n). | Half the parent’s number (n). |\n| **Stages** | Prophase → Metaphase → Anaphase → Telophase → Cytokinesis. | Meiosis I: Prophase I → Metaphase I → Anaphase I → Telophase I → Cytokinesis. <br>Meiosis II: Prophase II → Metaphase II → Anaphase II → Telophase II → Cytokinesis. |\n| **Key events** | Chromosomes line up singly at the metaphase plate. | Homologous chromosomes pair up (synapsis) and can exchange segments (cross‑over). |\n| **Genetic variat"
+    }
+  ],
+  "started": "2026-09-26 13:59:35",
+  "passed": 20,
+  "total": 22,
+  "score": 90.9,
+  "finished": "2026-09-26 14:06:28"
+}
