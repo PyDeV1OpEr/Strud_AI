@@ -14,3 +14,37 @@ strud_cache/
 .vscode/
 *.swp
 *.tmp
+
+# Crash dumps / diagnostics (local only)
+.soup-crashes/
+
+# ML fine-tuning artefacts — large binaries, never commit
+experiments/runs/
+*.safetensors
+*.bin
+*.gguf
+*.mlxfn
+
+# Experiment logs — local machine diagnostics only
+experiments/logs/
+
+# PDFs / books — copyrighted source material, local only
+Science/Biology/books/
+*.pdf
+
+# Test images (local fixtures)
+tests/test_images/
+
+# Environments & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Node / misc
+node_modules/
+
+# Packaging
+build/
+dist/
+*.egg-info/
