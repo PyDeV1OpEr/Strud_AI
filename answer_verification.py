@@ -19,7 +19,11 @@ from config import (
     ASSISTANT_NAME,
 )
 
-from answer_intelligence import find_repeated_phrases, find_filler_phrases
+from answer_intelligence import (
+    find_repeated_phrases,
+    find_filler_phrases,
+    _is_opinion_turn,
+)
 
 
 # ============================================================
@@ -151,30 +155,53 @@ class VerificationService:
         # back shares no content words with "test me on genetics", and
         # that is exactly right. Flagging it would trigger a revision
         # that turns the quiz question into a mini-lecture.
+        # Quiz ANSWER turns (evaluating "C" against the previous MCQ)
+        # are exempt for the same reason: the question being graded
+        # was asked in a previous turn.
         # Social turns are likewise exempt: a short reaction like
         # "Glad it hit the mark!" correctly shares no content words
         # with "HAHAHAHAHA" - punishing that would push the revision
         # loop into turning the reaction into a biology lecture.
         in_quiz_turn = self._is_quiz_turn(question)
         in_social_turn = self._is_social_turn(question, answer_plan)
+        in_quiz_answer_turn = self._is_quiz_answer_turn(question, answer_plan)
 
         if (
             len(answer) < 40
             and not in_quiz_turn
             and not in_social_turn
+            and not in_quiz_answer_turn
             and not (self._is_short_answer_appropriate(question, answer))
         ):
             report.relevance = False
             report.issues.append("Answer is too short to be useful.")
 
-        if not in_quiz_turn and not in_social_turn:
-            q_words = self._content_words(question)
-            a_words = self._content_words(answer)
-            if q_words and a_words and not (q_words & a_words):
-                report.relevance = False
-                report.issues.append(
-                    "Answer shares no key terms with the question."
-                )
+        # 1b. Refusal check (§26): a harmless opinion/venting turn
+        #     must never be answered with a canned model refusal -
+        #     that destroys the tutor relationship. Flag it for the
+        #     same revision path as any other failure.
+        in_opinion_turn = _is_opinion_turn(question)
+        if in_opinion_turn and self._looks_like_refusal(answer):
+            report.relevance = False
+            report.issues.append(
+                "OPINION TURN refusal: harmless venting/opinion was "
+                "refused. Respond conversationally instead."
+            )
+
+        if (
+            not in_quiz_turn
+            and not in_social_turn
+            and not in_quiz_answer_turn
+            and not in_opinion_turn
+        ):
+            if not self._is_greeting_question(question):
+                q_words = self._content_words(question)
+                a_words = self._content_words(answer)
+                if q_words and a_words and not (q_words & a_words):
+                    report.relevance = False
+                    report.issues.append(
+                        "Answer shares no key terms with the question."
+                    )
 
         # 3. Citation check: cited pages must exist in retrieved pages.
         #
@@ -213,6 +240,19 @@ class VerificationService:
                 report.issues.append(
                     "Answer repeats stock phrase(s) already used in "
                     "recent turns: " + ", ".join(sorted(repeated)[:3])
+                )
+
+            # §9: repeated conversational openings ("Sure thing!",
+            # "Absolutely!") across recent turns read as templated.
+            # The same opening twice in a row is a strike.
+            opener_matches = self._find_repeated_openings(
+                answer, previous_answers
+            )
+            if opener_matches:
+                report.no_repetition = False
+                report.issues.append(
+                    "Answer opens with the same conversational opener "
+                    "as a recent turn: " + ", ".join(sorted(opener_matches)[:2])
                 )
 
         # 5. Text-only claim check (multimodal bug guard).
@@ -387,6 +427,40 @@ class VerificationService:
             return None
 
     @staticmethod
+    def _find_repeated_openings(
+        answer: str, previous_answers: list[str]
+    ) -> list[str]:
+        """
+        Conversational openers reused in recent turns (§9). Only
+        flags short acknowledgement openers ("sure thing", "yes",
+        "absolutely") - two answers that both start with a content
+        sentence are fine.
+        """
+        OPENERS = {
+            "sure thing", "sure", "absolutely", "of course", "great",
+            "great question", "yes", "yeah", "yep", "no problem",
+            "alright", "okay",
+        }
+
+        def _opening(text: str) -> str:
+            words = re.findall(r"[a-z']+", (text or "").lower())
+            if not words:
+                return ""
+            if words[0] in OPENERS:
+                return words[0]
+            two = " ".join(words[:2])
+            return two if two in OPENERS else ""
+
+        opening = _opening(answer)
+        if not opening:
+            return []
+
+        for prev in previous_answers or []:
+            if _opening(prev) == opening:
+                return [opening]
+        return []
+
+    @staticmethod
     def _content_words(text: str) -> set[str]:
         stop = {
             "what", "why", "how", "is", "are", "the", "a", "an", "of",
@@ -409,6 +483,30 @@ class VerificationService:
         )
 
     @staticmethod
+    def _looks_like_refusal(answer: str) -> bool:
+        """Model-level canned refusals for harmless social turns."""
+        lowered = (answer or "").lower().replace("'", " ")
+        return (
+            ("sorry" in lowered or "can not" in lowered or "cannot" in lowered)
+            and ("can not help" in lowered or "cannot help" in lowered
+                 or "can not assist" in lowered
+                 or "cannot assist" in lowered
+                 or "can t help" in lowered)
+        )
+
+    @staticmethod
+    def _is_greeting_question(question: str) -> bool:
+        """
+        Greeting/thanks/social messages share no content words with a
+        normal reply - that is not an irrelevance failure.
+        """
+        lowered = (question or "").lower().strip()
+        return lowered.startswith(
+            ("hi", "hello", "hey", "thanks", "thank you", "how are you",
+             "howdy", "good morning", "good evening", "good night")
+        )
+
+    @staticmethod
     def _is_social_turn(question: str, answer_plan) -> bool:
         """
         True when the internal plan classified this as a social
@@ -421,6 +519,21 @@ class VerificationService:
             and str(getattr(answer_plan, "notes", "")).startswith(
                 "SOCIAL TURN"
             )
+        )
+
+    @staticmethod
+    def _is_quiz_answer_turn(question: str, answer_plan) -> bool:
+        """
+        True when this turn evaluates an answer to a PREVIOUS quiz
+        question ("C" against the pending MCQ). The question being
+        graded belongs to an earlier turn, so content-word overlap
+        with the current message is meaningless.
+        """
+        return (
+            answer_plan is not None
+            and str(getattr(answer_plan, "answer_type", ""))
+            == "answer_feedback"
+            and getattr(answer_plan, "tutoring_mode", "") == "correction"
         )
 
     @staticmethod

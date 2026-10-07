@@ -40,18 +40,23 @@ from answer_intelligence import (
     ConversationMemory,
     find_repeated_phrases,
     find_filler_phrases,
+    validation_from_report,
     to_dict as plan_to_dict,
     AnswerPlan,
     AnswerValidation,
     PYDANTIC_AVAILABLE,
 )
 from answer_verification import VerificationService
+from answer_intelligence import _parse_format_request
 from Science.Biology.biology import (
     build_biology_prompt,
     BiologyMode,
     TEXTBOOK_SYSTEM_PROMPT,
     GENERAL_SYSTEM_PROMPT,
     GENERAL_BIOLOGY_SYSTEM_PROMPT,
+    CONVERSATION_LAYER,
+    DOMAIN_LAYER,
+    STYLE_LAYER,
 )
 
 
@@ -625,6 +630,181 @@ def test_verification() -> None:
           str(report.issues))
 
 
+def test_validation_schema_compat() -> None:
+    """§18: AnswerValidation/VerificationReport must be compatible."""
+    print("\n[10] Validation schema compatibility (crash fix)")
+
+    from answer_verification import VerificationReport
+
+    report = VerificationReport(
+        relevance=True,
+        answered_question=True,
+        no_unsupported_citations=False,
+        issues=["Answer cites pages not in the retrieved evidence: [77]"],
+    )
+    validation = validation_from_report(report, grounded=False)
+
+    # The exact attribute that crashed: AnswerValidation must expose
+    # no_unsupported_citations (and citations_valid).
+    crashed = False
+    try:
+        _ = validation.no_unsupported_citations
+        _ = validation.citations_valid
+        _ = validation.passed
+    except AttributeError:
+        crashed = True
+    check("validation: no_unsupported_citations accessible",
+          not crashed, "AttributeError on AnswerValidation")
+    check("validation: citation failure propagates",
+          validation.no_unsupported_citations is False,
+          str(validation))
+    check("validation: issues carried over",
+          validation.issues == report.issues, str(validation.issues))
+
+    # Reverse compatibility: report-style access on validation
+    check("validation: report-style fields present",
+          hasattr(validation, "relevance")
+          and hasattr(validation, "answered_question")
+          and hasattr(validation, "no_repetition"), "")
+
+    # _verify-style defensive path: None report must not raise
+    try:
+        validation2 = validation_from_report(None)
+        ok = True
+    except Exception:
+        ok = False
+    check("validation: None report handled gracefully", ok, "")
+
+
+def test_quiz_state() -> None:
+    """§11: interactive quiz state and short answer attempts."""
+    print("\n[11] Interactive quiz state")
+
+    memory = ConversationMemory()
+    memory.start_quiz(
+        "Which stage comes first in mitosis?",
+        "Prophase",
+        {"A": "Anaphase", "B": "Prophase", "C": "Telophase"},
+    )
+    check("quiz: state active", memory.quiz_active, "")
+    check("quiz: question stored",
+          "mitosis" in memory.quiz_question.lower(),
+          memory.quiz_question)
+
+    # Bare option letter / idk / one more -> correction turn
+    for msg in ("C", "B I think", "one more", "idk", "2"):
+        check(f"quiz: {msg!r} -> correction",
+              infer_tutoring_mode(msg, memory=memory) == "correction", "")
+
+    # Real questions / social reactions stay themselves
+    for msg, expected in (
+        ("Explain mitosis", "none"),
+        ("what is ATP?", "none"),
+        ("thanks bro", "none"),
+        ("haha", "none"),
+    ):
+        check(f"quiz: {msg!r} -> {expected}",
+              infer_tutoring_mode(msg, memory=memory) == expected, "")
+
+    # No quiz -> bare letters are NOT quiz answers
+    fresh = ConversationMemory()
+    check("quiz: bare letter without quiz state -> none",
+          infer_tutoring_mode("C", memory=fresh) == "none", "")
+    check("quiz: 'one more' without state still continues",
+          infer_tutoring_mode("one more", memory=fresh) == "correction", "")
+
+    # Quiz answer plan carries the pending-question note
+    plan = build_answer_plan("C", memory=memory)
+    check("quiz: plan is answer_feedback",
+          plan.answer_type == "answer_feedback", plan.answer_type)
+    check("quiz: plan note has pending question",
+          "quiz is in progress" in (plan.notes or "").lower(), plan.notes)
+    check("quiz: plan note has correct answer",
+          "Prophase" in (plan.notes or ""), plan.notes)
+
+    memory.clear_quiz()
+    check("quiz: clear deactivates", not memory.quiz_active, "")
+
+
+def test_format_requests() -> None:
+    """§7/§19/§20: explicit length and format requests."""
+    print("\n[12] Format & length requests")
+
+    # Parsing
+    cases = (
+        ("Give me a 1200 word essay about Biology",
+         {"words": 1200, "style": "essay"}),
+        ("Only paragraphs", {"style": "paragraphs_only"}),
+        ("Make it exam style", {"style": "exam"}),
+        ("Explain it like I'm 10", {"style": "simple"}),
+        ("Give me a short answer", {"length": "short"}),
+        ("What is mitosis?", {}),
+        ("Explain cross pollination in detail", {}),
+    )
+    for msg, expected in cases:
+        got = _parse_format_request(msg)
+        check(f"format: {msg[:34]!r} parsed",
+              all(got.get(k) == v for k, v in expected.items())
+              and len(got) == len(expected), str(got))
+
+    # A word-count request raises depth and reaches the plan notes
+    memory = ConversationMemory()
+    plan = build_answer_plan(
+        "Give me a 1200 word essay about Biology", memory=memory
+    )
+    check("format: essay -> deep_dive depth", plan.depth == "deep_dive",
+          plan.depth)
+    check("format: word count in notes", "1200" in (plan.notes or ""),
+          plan.notes)
+
+    # Persisted across follow-up turns
+    check("format: preference remembered",
+          memory.format_prefs.get("words") == 1200, str(memory.format_prefs))
+    plan2 = build_answer_plan("Explain mitosis", memory=memory)
+    check("format: follow-up turn keeps format note",
+          "FORMAT REQUEST" in (plan2.notes or ""), plan2.notes)
+
+    # Short request lowers depth
+    memory2 = ConversationMemory()
+    plan3 = build_answer_plan("Give me a short answer on enzymes",
+                              memory=memory2)
+    check("format: short request -> short depth", plan3.depth == "short",
+          plan3.depth)
+
+
+def test_offtopic_planning() -> None:
+    """§4/§5: general-knowledge questions plan as conversation."""
+    print("\n[13] Off-topic / general knowledge planning")
+
+    for msg in ("Who is Elon Musk?", "Who is Warren Buffett then?"):
+        plan = build_answer_plan(
+            msg,
+            decision=type("D", (), {"intent": "other",
+                                    "domain": "other",
+                                    "needs_retrieval": False})(),
+            assessment=None,
+        )
+        check(f"off-topic: {msg!r} -> conversation mode",
+              plan.mode == "conversation", plan.mode)
+        check(f"off-topic: {msg!r} -> no citations",
+              not plan.citation_required, "")
+
+    # DOMAIN_LAYER instructs one-light-scope-note + real answer
+    check("off-topic: DOMAIN_LAYER scope guidance present",
+          "outside Biology" in DOMAIN_LAYER
+          and "Never refuse" in DOMAIN_LAYER, "")
+
+    # Opinion/social + emotional support guidance present
+    check("opinion: CONVERSATION_LAYER opinion guidance present",
+          "opinion or uses strong language" in CONVERSATION_LAYER, "")
+    check("emotion: strategic-not-spam guidance present",
+          "motivational speeches" in CONVERSATION_LAYER, "")
+    check("openings: opener variation guidance present",
+          "Vary your openings" in CONVERSATION_LAYER, "")
+    check("answer-first: verdict-first guidance present",
+          "Answer the actual question FIRST" in STYLE_LAYER, "")
+
+
 # ============================================================
 # 8. IDENTITY & LEAK PREVENTION (MASTER SYSTEM SPEC #3/#4/#26/#37)
 # ============================================================
@@ -826,6 +1006,10 @@ def main() -> None:
     test_repetition()
     test_prompts()
     test_verification()
+    test_validation_schema_compat()
+    test_quiz_state()
+    test_format_requests()
+    test_offtopic_planning()
     test_identity_leaks()
     test_phase1()
 

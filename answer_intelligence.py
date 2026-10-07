@@ -103,20 +103,35 @@ class AnswerPlan:
 
 @_schema
 class AnswerValidation:
-    """Internal record of the post-generation quality checks."""
+    """
+    Internal record of the post-generation quality checks.
+
+    Field names mirror the checks this layer actually makes. The
+    attribute aliases below keep the internal validation schema
+    compatible with the verifier's VerificationReport naming
+    (no_unsupported_citations), so no caller can hit an
+    "object has no attribute ..." error when adapting between the
+    two shapes (§18).
+    """
 
     grounded: bool = False
     evidence_sufficient: bool = False
     citations_valid: bool = True
     answered_question: bool = True
+    relevance: bool = True
+    no_unsupported_citations: bool = True
+    no_text_only_claims: bool = True
+    no_repetition: bool = True
     unsupported_claims: list[str] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
         return (
-            self.citations_valid
+            self.relevance
+            and self.citations_valid
             and self.answered_question
+            and self.no_repetition
             and not self.issues
         )
 
@@ -195,9 +210,200 @@ QUIZ_ANSWER_MARKERS = (
     "my answer is", "the answer is",
 )
 
+QUIZ_CONTINUATION_MARKERS = (
+    "one more", "another one", "next one", "next question",
+    "keep going", "continue", "again",
+)
+
+# Opinion / venting turns: strong language about a person or topic is
+# ordinary conversation, not a safety event (§26 behaviour spec).
+VENTING_MARKERS = (
+    "fuck", "shit", "bitch", "bastard", "dick", "ass",
+    "scum", "trash", "garbage", "hate him", "hate her", "hate them",
+    "is garbage", "is trash", "sucks",
+)
+
+OPINION_MARKERS = (
+    "isn't he", "isnt he", "isn't she", "isnt she",
+    "don't you think", "dont you think", "right?", "am i wrong",
+    "what do you think", "your opinion",
+)
+
+# ------------------------------------------------------------
+# Format & length requests (§19/§20 of the behaviour spec)
+# ------------------------------------------------------------
+
+ESSAY_FORMATS = (
+    "essay", "structured answer", "exam style", "exam-style",
+)
+
+FORMAT_MARKERS = (
+    "paragraphs only", "only paragraphs", "no bullet points",
+    "no bullets", "no headings", "no tables", "paragraph form",
+    "in paragraphs", "as paragraphs", "bullet points", "in bullets",
+    "use bullets", "as a table", "in a table", "table format",
+    "with headings", "numbered points", "step by step",
+    "step-by-step", "flashcards", "like i'm 10", "like im 10",
+    "like i am 10", "explain like i", "in simple terms",
+    "simply", "make it simple", "easy to understand",
+    "more simply", "simplify",
+)
+
+
+def _parse_format_request(text: str) -> dict:
+    """
+    Deterministic extraction of an explicit length/format request.
+
+    Returns {} when the message carries none, so ordinary answers are
+    never reshaped by accident.
+    """
+    text = (text or "").lower()
+    if not text.strip():
+        return {}
+
+    request: dict = {}
+
+    # Explicit word count: "1200 word essay", "give me 800 words",
+    # "a 300-word answer".
+    word_match = re.search(
+        r"\b(\d{2,5})\s*(?:-|\s)?\s*(?:word|words)\b", text
+    )
+    if word_match:
+        try:
+            words = int(word_match.group(1))
+            if 50 <= words <= 3000:
+                request["words"] = words
+        except ValueError:
+            pass
+
+    if any(marker in text for marker in ("essay", "essay about")):
+        request["style"] = "essay"
+    elif "paragraphs only" in text or "only paragraphs" in text:
+        request["style"] = "paragraphs_only"
+    elif any(marker in text for marker in (
+        "paragraph form", "in paragraphs", "as paragraphs",
+    )):
+        request["style"] = "paragraphs_only"
+
+    if "exam style" in text or "exam-style" in text:
+        request["style"] = "exam"
+
+    if any(marker in text for marker in (
+        "bullet points", "in bullets", "use bullets",
+    )):
+        request["style"] = "bullets"
+
+    if any(marker in text for marker in (
+        "as a table", "in a table", "table format",
+    )):
+        request["style"] = "table"
+
+    if any(marker in text for marker in (
+        "step by step", "step-by-step",
+    )):
+        request["style"] = "steps"
+
+    if any(marker in text for marker in (
+        "like i'm 10", "like im 10", "like i am 10", "explain like i",
+        "in simple terms", "make it simple", "easy to understand",
+        "simplify", "more simply",
+    )):
+        request["style"] = "simple"
+
+    if "flashcards" in text:
+        request["style"] = "flashcards"
+
+    # Short/brief requests that are not already captured by depth
+    if any(marker in text for marker in (
+        "short answer", "keep it short", "make it short", "be brief",
+        "briefly",
+    )):
+        request["length"] = "short"
+
+    return request
+
+
+def format_guidance(request: dict) -> str:
+    """
+    Turn a parsed format request into prompt-facing instructions.
+    Empty string when there is nothing to honor.
+    """
+    if not request:
+        return ""
+
+    parts: list[str] = []
+
+    words = request.get("words")
+    if words:
+        parts.append(
+            f"The student explicitly asked for about {words} words. "
+            "Write a complete piece of that length - do not stop early."
+        )
+
+    style = request.get("style")
+    if style == "essay":
+        parts.append(
+            "Write this as a proper essay: flowing continuous prose "
+            "with a clear line of argument. No bullet points, no "
+            "tables, no headings unless the student asks for them."
+        )
+    elif style == "paragraphs_only":
+        parts.append(
+            "Write ONLY in paragraphs. No bullet points, no numbered "
+            "lists, no tables, no headings."
+        )
+    elif style == "exam":
+        parts.append(
+            "Use G.C.E. A/L exam conventions: precise terminology and "
+            "mark-scoring points the way an examiner expects."
+        )
+    elif style == "bullets":
+        parts.append(
+            "Use bullet points for the content. Keep each point tight."
+        )
+    elif style == "table":
+        parts.append("Present the content as a table.")
+    elif style == "steps":
+        parts.append(
+            "Present the answer as ordered steps, in the order the "
+            "process actually happens."
+        )
+    elif style == "simple":
+        parts.append(
+            "Use very simple, student-friendly language and everyday "
+            "analogies; avoid jargon unless you explain it."
+        )
+    elif style == "flashcards":
+        parts.append(
+            "Format the content as question/answer flashcards."
+        )
+
+    if request.get("length") == "short":
+        parts.append("Keep the answer short, as requested.")
+
+    return " ".join(parts)
+
 
 def _contains(text: str, markers) -> bool:
     return any(marker in text for marker in markers)
+
+
+def _is_opinion_turn(question: str) -> bool:
+    """
+    True when the message is venting / strong opinion about someone
+    ("He is a scum, isn't he?") rather than a question to answer.
+    This is conversation, and must never hit a refusal path.
+    """
+    text = (question or "").lower()
+    if not text.strip():
+        return False
+    return _contains(text, VENTING_MARKERS) or (
+        _contains(text, OPINION_MARKERS)
+        and any(word in text for word in (
+            "he ", "she ", "they ", "him ", "her ", "them ",
+            "this guy", "that guy",
+        ))
+    )
 
 
 # ============================================================
@@ -207,12 +413,42 @@ def _contains(text: str, markers) -> bool:
 def infer_tutoring_mode(
     question: str,
     history: Optional[list] = None,
+    memory=None,
 ) -> str:
     """Decide whether the student is asking to be tutored."""
     text = (question or "").lower().strip()
 
+    # A pending quiz question turns a bare answer ("C", "B I think",
+    # "one more") into a correction/continuation turn. A real question
+    # ("Explain mitosis", anything phrased as a question) ends the
+    # quiz interaction and is treated normally.
+    if getattr(memory, "quiz_active", False):
+        looks_like_new_question = (
+            text.endswith("?")
+            or bool(re.match(
+                r"^(what|why|how|when|where|who|which|explain|define|"
+                r"describe|compare|give|tell|teach|help|can you|could you|"
+                r"please|do you|is|are|name|thanks|thank|nice|haha|lol)",
+                text,
+            ))
+            or len(text.split()) > 4
+        )
+        if _contains(text, QUIZ_CONTINUATION_MARKERS):
+            return "correction"
+        # Pure social reactions during a quiz ("thanks bro", "haha")
+        # are still social - they are not answer attempts.
+        is_social_reaction = (
+            not re.search(r"\b[a-d]\b", text)
+            and not any(ch.isdigit() for ch in text)
+            and _contains(text, CASUAL_MARKERS)
+        )
+        if not looks_like_new_question and not is_social_reaction:
+            return "correction"
+
     if _contains(text, QUIZ_MARKERS):
         return "quiz"
+    if _contains(text, QUIZ_CONTINUATION_MARKERS):
+        return "correction"
     if _contains(text, QUIZ_ANSWER_MARKERS):
         return "correction"
     if _contains(text, CORRECTION_MARKERS):
@@ -333,7 +569,7 @@ def build_answer_plan(
 
     history = list(getattr(memory, "turns", []) or []) if memory else []
 
-    tutoring_mode = infer_tutoring_mode(question, history)
+    tutoring_mode = infer_tutoring_mode(question, history, memory=memory)
     depth = estimate_depth(question, intent=intent, tutoring_mode=tutoring_mode)
     tone = estimate_tone(question, intent=intent)
 
@@ -370,6 +606,30 @@ def build_answer_plan(
     else:
         mode, answer_type = "conversation", "conversation"
 
+    # Explicit format/length requests (§19/§20) override the default
+    # depth for this turn and are remembered for follow-ups. A quiz
+    # turn keeps its own one-question shape.
+    format_request: dict = {}
+    if memory is not None:
+        merged, format_request = memory.pop_format_request(question)
+        if format_request:
+            memory.set_format_prefs(format_request)
+            request = format_request
+        else:
+            request = merged
+    else:
+        request = {}
+
+    if request and tutoring_mode != "quiz":
+        if request.get("words"):
+            depth = "deep_dive"
+        if request.get("style") in ("essay",) and depth not in (
+            "deep_dive",
+        ):
+            depth = "detailed"
+        if request.get("length") == "short":
+            depth = "short"
+
     if mode == "teaching":
         text = (question or "").lower()
         if _contains(text, ("compare", "difference", "differences", " versus ", " vs ")):
@@ -378,6 +638,9 @@ def build_answer_plan(
             answer_type = "mechanism"
         elif _contains(text, SHORT_FACT_MARKERS) and depth in ("very_short", "short"):
             answer_type = "direct_fact"
+
+    if _is_opinion_turn(question):
+        mode, answer_type = "conversation", "conversation"
 
     if visual:
         answer_type = "visual_explanation"
@@ -405,6 +668,22 @@ def build_answer_plan(
             "QUIZ TURN: reply with exactly one question and nothing "
             "else. No lesson, no definitions, no answer."
         )
+    elif tutoring_mode == "correction" and getattr(
+        memory, "quiz_active", False
+    ):
+        quiz_state = memory.quiz_note()
+        if quiz_state:
+            notes = quiz_state
+    elif _is_opinion_turn(question):
+        notes = (
+            "OPINION TURN: the student is venting or sharing an opinion "
+            "about a person or topic. This is ordinary conversation, "
+            "NOT a safety issue. Do NOT refuse, do NOT say you can't "
+            "help with that, do NOT moralize, and do NOT repeat their "
+            "slurs. React like a person would in your own words - "
+            "acknowledge the feeling, stay balanced, keep it brief, "
+            "and move the conversation forward."
+        )
     elif intent == "social_reaction":
         notes = (
             "SOCIAL TURN: the student is reacting to the previous "
@@ -424,6 +703,16 @@ def build_answer_plan(
             "No usable textbook evidence: answer from general biology "
             "knowledge and say plainly that the textbook does not cover "
             "it. Never cite the book."
+        )
+
+    # Format/length request reaches the prompt as an explicit turn
+    # instruction (§19/§20).
+    format_text = format_guidance(request)
+    if format_text:
+        notes = (
+            (notes + " " if notes else "")
+            + "FORMAT REQUEST: "
+            + format_text
         )
 
     return AnswerPlan(
@@ -454,14 +743,27 @@ def validation_from_report(report, assessment=None, grounded: bool = False) -> A
         if "cite" in lowered or "citation" in lowered:
             unsupported.append(issue)
 
+    citations_valid = bool(
+        getattr(report, "no_unsupported_citations", True)
+        and getattr(report, "citations_valid", True)
+    )
+
+    relevance = bool(
+        getattr(report, "relevance", True)
+        and getattr(report, "appropriate_level", True)
+    )
+
     return AnswerValidation(
         grounded=bool(grounded),
         evidence_sufficient=bool(getattr(assessment, "sufficient", False)),
-        citations_valid=bool(
-            getattr(report, "no_unsupported_citations", True)
+        citations_valid=citations_valid,
+        no_unsupported_citations=citations_valid,
+        relevance=relevance,
+        answered_question=bool(getattr(report, "answered_question", True)),
+        no_text_only_claims=bool(
+            getattr(report, "no_text_only_claims", True)
         ),
-        answered_question=bool(getattr(report, "relevance", True))
-        and bool(getattr(report, "answered_question", True)),
+        no_repetition=bool(getattr(report, "no_repetition", True)),
         unsupported_claims=unsupported,
         issues=issues,
     )
@@ -480,6 +782,10 @@ class ConversationMemory:
     give you cheaply:
       - what the previous question was about, and
       - which pages were retrieved for it.
+
+    It also tracks the interactive quiz state: when a quiz question is
+    pending, the student's next short message is their ANSWER, and
+    "one more" continues the quiz instead of starting a new topic.
     """
 
     def __init__(self, max_turns: int = MAX_MEMORY_TURNS) -> None:
@@ -490,6 +796,55 @@ class ConversationMemory:
         self.last_pages: list[int] = []
         self.last_topics: list[str] = []
         self.recent_answers: list[str] = []
+
+        # Interactive quiz state (§11): the last quiz question Strud
+        # asked, its correct option letter, and the option list.
+        # quiz_active makes the next short user message an answer.
+        self.quiz_active: bool = False
+        self.quiz_question: str = ""
+        self.quiz_answer: str = ""
+        self.quiz_options: dict = {}
+        self.quiz_score: list[bool] = []
+
+        # Persistent format/length preferences (§19/§20): "only
+        # paragraphs" applies to the follow-up turns too.
+        self.format_prefs: dict = {}
+
+    # ------------------------------------------------------
+
+    def start_quiz(self, question: str, answer: str, options=None) -> None:
+        """Record a pending quiz question (interactive mode)."""
+        self.quiz_active = True
+        self.quiz_question = (question or "").strip()
+        self.quiz_answer = (answer or "").strip()
+        self.quiz_options = dict(options or {})
+
+    def clear_quiz(self) -> None:
+        self.quiz_active = False
+        self.quiz_question = ""
+        self.quiz_answer = ""
+        self.quiz_options = {}
+
+    def quiz_note(self) -> str:
+        """Internal prompt note describing the pending quiz state."""
+        if not self.quiz_active:
+            return ""
+        parts = ["An interactive quiz is in progress."]
+        if self.quiz_question:
+            parts.append(
+                f"The pending question is: {self.quiz_question[:300]}"
+            )
+        if self.quiz_answer:
+            parts.append(
+                f"The correct answer is: {self.quiz_answer}"
+            )
+        parts.append(
+            "The student's latest message is their answer attempt (or a "
+            "request like 'one more'). Say clearly whether they were "
+            "right, briefly explain the reasoning, correct any "
+            "misconception, then ask the next question and stop."
+        )
+        return " ".join(parts)
 
     # ------------------------------------------------------
 
@@ -506,6 +861,23 @@ class ConversationMemory:
         elif role == "assistant":
             self.recent_answers.append(content)
             self.recent_answers = self.recent_answers[-REPETITION_LOOKBACK_TURNS:]
+
+    def set_format_prefs(self, request: dict) -> None:
+        """Remember explicit format/length requests across turns."""
+        if request:
+            self.format_prefs.update(request)
+
+    def pop_format_request(self, question: str) -> dict:
+        """
+        Format/length request active for THIS turn: anything the
+        student just asked for (highest priority) merged over the
+        remembered preferences (§19: remembered across follow-ups).
+        """
+        fresh = _parse_format_request(question)
+        if fresh:
+            return dict(self.format_prefs), fresh
+        merged = dict(self.format_prefs)
+        return merged, fresh
 
     def record_evidence(self, query: str, pages, topics=None) -> None:
         self.last_query = (query or "").strip()
@@ -599,6 +971,9 @@ REPETITIVE_PHRASES = (
     "let me know if you'd like",
     "let me know if you would like",
     "let me know if you need",
+    "just let me know",
+    "i'll be happy to",
+    "i would be happy to",
     "i'm designed for",
     "i am designed for",
     "in g.c.e. advanced level biology",
@@ -707,18 +1082,21 @@ TUTORING_GUIDANCE = {
         "step reachable."
     ),
     "quiz": (
-        "Act as an interactive tutor: ask the student ONE question and "
-        "STOP. Your entire reply must contain the question, optionally "
-        "with a one-line lead-in. Do NOT teach the topic first, do NOT "
-        "explain any concepts, and do NOT reveal the answer or ask the "
-        "next question. Wait for the student's answer before doing "
-        "anything else."
+        "Act as an interactive tutor starting a quiz. Open with a "
+        "short natural lead-in (vary it - never the same opener as "
+        "recent turns), then ask ONE question and STOP. Your entire "
+        "reply must contain exactly one question. Do NOT teach the "
+        "topic first, do NOT explain concepts, and do NOT reveal the "
+        "answer. Wait for the student's answer before doing anything "
+        "else. Make it feel like a tutor sitting with the student, "
+        "not a printed exam paper."
     ),
     "correction": (
-        "The student has attempted an answer (or said they don't know). "
-        "Say what is right, what is missing or wrong and why, give the "
-        "correct reasoning, then optionally offer one follow-up "
-        "question. Do not repeat the whole lesson."
+        "The student has answered (or said they don't know) - likely to "
+        "the pending quiz question. Say clearly whether they were right "
+        "or wrong, explain the reasoning briefly, correct any "
+        "misconception, then ask the next question and stop. Do not "
+        "repeat the whole lesson."
     ),
     "revision": (
         "Give a tight, high-value recap of the key points and the "

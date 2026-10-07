@@ -177,7 +177,8 @@ def run_case(client, engine, router, verifier, memory, message, checks):
         if retrieval.grounded and assessment.sufficient:
             context = create_textbook_context(retrieval)
             retrieval_pages = {r.page for r in retrieval.results}
-            plan = build_answer_plan(message, decision, assessment)
+            plan = build_answer_plan(message, decision, assessment,
+                                     memory=memory)
             answer = engine.answer(
                 question=message,
                 context=context,
@@ -192,7 +193,8 @@ def run_case(client, engine, router, verifier, memory, message, checks):
             ) else ""
             mode = BiologyMode.MIXED if context else BiologyMode.GENERAL
             retrieval_pages = set() if not context else retrieval_pages
-            plan = build_answer_plan(message, decision, assessment)
+            plan = build_answer_plan(message, decision, assessment,
+                                     memory=memory)
             answer = engine.answer(
                 question=message,
                 context=context,

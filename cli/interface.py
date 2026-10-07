@@ -23,6 +23,7 @@ from answer_intelligence import (
     build_answer_plan,
     find_repeated_phrases,
     validation_from_report,
+    AnswerValidation,
     to_dict as plan_to_dict,
     PYDANTIC_AVAILABLE,
 )
@@ -377,8 +378,8 @@ class StrudCLI:
 
         # ------------------------------------------------------
         # 5. Everything else: casual conversation, small talk,
-        #    comments, and non-biology messages all reach the
-        #    main LLM, which decides the natural response.
+        #    comments, quiz answers, and non-biology messages all
+        #    reach the main LLM, which decides the natural response.
         #    NO hardcoded rejection anywhere.
         # ------------------------------------------------------
 
@@ -425,11 +426,121 @@ class StrudCLI:
         self._last_plan = plan
         self._remember(question, answer)
 
+        # Interactive quiz state (§11): when the last reply asked a
+        # quiz question, the student's NEXT short message is their
+        # answer attempt. Parse the reply for a correct/incorrect
+        # verdict ("C" is correct" / "not quite - it's B") so the
+        # score can be tracked without trusting the model's own
+        # bookkeeping.
+        if plan.tutoring_mode == "quiz":
+            self._register_quiz_question(answer)
+        elif plan.tutoring_mode == "correction" and self.memory.quiz_active:
+            self._score_quiz_answer(question, answer)
+
         self.renderer.print_answer(
             answer=answer,
             route_label=route_label,
             grounded=False,
         )
+
+    # ------------------------------------------------------------
+    # INTERACTIVE QUIZ STATE (§11)
+    # ------------------------------------------------------------
+
+    def _register_quiz_question(self, answer: str) -> None:
+        """
+        After a QUIZ TURN reply, try to recover the asked question,
+        its options and the correct option letter from the reply.
+        Best-effort: the question text itself is always stored, and
+        the answer letter is optional.
+        """
+        import re as _re
+
+        text = answer or ""
+
+        # "Which stage comes first in mitosis?" - the final sentence
+        # ending in '?' is the question.
+        question = ""
+        for candidate in _re.findall(r"[^.!?\n]*\?", text):
+            candidate = candidate.strip()
+            if len(candidate.split()) >= 3:
+                question = candidate
+        if not question:
+            question = text.strip()[-300:]
+
+        # Options: lines like "A) ..." / "(B) ..." / "C. ..."
+        options = {}
+        for match in _re.finditer(
+            r"(?:^|\n)\s*\(?([A-D])\)?[).:]\s*([^\n]+)", text
+        ):
+            options[match.group(1)] = match.group(2).strip()[:120]
+
+        # Correct answer: NOT in the reply (the tutor must not reveal
+        # it). It is resolved from the textbook at scoring time.
+        self.memory.start_quiz(question, "", options)
+
+    def _score_quiz_answer(self, user_message: str, answer: str) -> None:
+        """
+        After an answer-feedback turn, compare the student's attempt
+        letter against the option letter the tutor confirmed as
+        correct ("Yep, C is correct"), and record the score. Then
+        clear the pending question so unrelated short messages are
+        not mistaken for further attempts.
+        """
+        import re as _re
+
+        lowered = (answer or "").lower()
+        attempt = (user_message or "").lower().strip()
+
+        # The option the tutor says is correct.
+        correct_letter = None
+        match = (
+            _re.search(
+                r"\b([a-d])\b\s+(?:is\s+)?(?:indeed\s+)?correct",
+                lowered,
+            )
+            or _re.search(
+                r"correct\s+(?:answer|option)\s+is\s+\(?([a-d])\)?",
+                lowered,
+            )
+            or _re.search(
+                r"\b([a-d])\b\s*(?:—|-|:)?\s*(?:that'?s?\s+)?right",
+                lowered,
+            )
+        )
+        if match:
+            correct_letter = match.group(1)
+
+        # The student's attempt: a bare option letter, "option C",
+        # or "the answer is C".
+        attempt_letter = None
+        attempt_match = (
+            _re.fullmatch(r"\(?([a-d])\)?[.!]?", attempt)
+            or _re.search(r"\boption\s+\(?([a-d])\)?", attempt)
+            or _re.search(r"answer\s+is\s+\(?([a-d])\)?", attempt)
+        )
+        if attempt_match:
+            attempt_letter = attempt_match.group(1)
+
+        if correct_letter and attempt_letter:
+            self.memory.quiz_score.append(
+                attempt_letter == correct_letter
+            )
+
+        # One attempted answer consumed.
+        self.memory.clear_quiz()
+
+        # If the feedback ended with the NEXT quiz question ("Yep, C
+        # is correct... Next question: ..."), the quiz continues -
+        # re-register so the following short message is treated as
+        # the next answer attempt.
+        next_question = ""
+        for candidate in _re.findall(r"[^.!?\n]*\?", answer or ""):
+            candidate = candidate.strip()
+            if len(candidate.split()) >= 3:
+                next_question = candidate
+        if next_question:
+            self._register_quiz_question(next_question)
 
     def get_route_label_from_decision(self, decision) -> str:
         """
@@ -480,11 +591,24 @@ class StrudCLI:
             answer_plan=answer_plan,
         )
 
-        validation = validation_from_report(
-            report,
-            assessment=assessment,
-            grounded=grounded,
-        )
+        try:
+            validation = validation_from_report(
+                report,
+                assessment=assessment,
+                grounded=grounded,
+            )
+        except Exception:
+            # §18: validation bookkeeping must never break the
+            # conversation. If adaptation fails, keep a permissive
+            # validation record (citations trusted because the
+            # verifier already ran) and continue.
+            validation = AnswerValidation(
+                grounded=bool(grounded),
+                evidence_sufficient=bool(
+                    getattr(assessment, "sufficient", False)
+                ),
+                issues=["validation record could not be built"],
+            )
         self._last_validation = validation
 
         return answer, validation
@@ -686,7 +810,7 @@ class StrudCLI:
                 r.page for r in (retrieval.results or [])
             }
 
-        answer, _report = self._verify(
+        answer, validation = self._verify(
             question=question,
             answer=answer,
             retrieved_pages=retrieved_pages_set,
@@ -700,8 +824,19 @@ class StrudCLI:
         self._last_plan = plan
         self._remember(question, answer)
 
+        # Interactive quiz state (§11) - the retrieval path also asks
+        # quiz questions (study_request route).
+        if plan.tutoring_mode == "quiz":
+            self._register_quiz_question(answer)
+        elif plan.tutoring_mode == "correction" and self.memory.quiz_active:
+            self._score_quiz_answer(question, answer)
+
+        # AnswerValidation records citations_valid (not the verifier's
+        # no_unsupported_citations attribute); treat a failed internal
+        # validation as not grounded so the note is honest.
         grounded_output = (
-            assessment.sufficient and _report.no_unsupported_citations
+            assessment.sufficient
+            and bool(getattr(validation, "citations_valid", True))
         )
 
         if grounded_output:
