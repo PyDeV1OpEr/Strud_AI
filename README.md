@@ -15,6 +15,7 @@ Strud AI is not a thin wrapper around a chat API. It is an end-to-end, privacy-f
 - **🎯 Behaviour Fine-Tuning Pipeline** — A complete MLX (Apple Silicon) LoRA fine-tuning workflow on `openai/gpt-oss-20b`: a curated, behaviour-only SFT dataset, experiment configs, benchmark evals, and reproducible result logs.
 - **💬 Human-Grade Conversation** — Semantic routing separates casual chat from subject matter, so Strud talks like a real tutor instead of answering everything like a textbook.
 - **🖥️ Modern TUI** — A polished terminal experience (Rich + prompt-toolkit): themed rendering, streaming replies, and graceful input handling.
+- **🌐 Web Chat Interface** — A dark-first glassmorphism chat UI (Next.js + React + TypeScript + FastAPI) backed by the same pipeline: chat history with search and grouping, image attachments answered through the Qwen3-VL vision path, page-cited sources, and typed thinking states.
 
 ---
 
@@ -68,6 +69,7 @@ Strud AI is not a thin wrapper around a chat API. It is an end-to-end, privacy-f
 | [llm_client.py](llm_client.py) | Client for a local OpenAI-compatible LLM server |
 | [Science/Biology/](Science/Biology/) | Biology engine, hybrid retriever, and vision (diagram) pipeline |
 | [cli/](cli/) | Rich-based terminal UI: interface, input handling, rendering |
+| [strud/](strud/) | Web interface: Next.js frontend + FastAPI adapter over the same pipeline |
 | [experiments/](experiments/) | Fine-tuning configs, dataset builder, benchmarks, results |
 
 ---
@@ -101,6 +103,20 @@ python main.py
 ```
 
 Place your A-Level Biology resource-book PDFs under `Science/Biology/books/` — the retriever indexes them on first use. *(Books are copyright material and are git-ignored; supply your own copies.)*
+
+### Web UI (optional)
+
+The same pipeline is also served over HTTP via a glassmorphism chat interface in [strud/](strud/) (Next.js + TypeScript frontend, FastAPI adapter backend). Full setup — including the adapter's startup command, the per-chat session model, and the `NEXT_PUBLIC_BACKEND_URL` environment variable — is documented in [strud/README.md](strud/README.md):
+
+```bash
+# 1. Start LM Studio with openai/gpt-oss-20b on http://localhost:1234
+# 2. FastAPI adapter (from the repo root, using the project's venv):
+.venv/bin/python -m uvicorn strud.backend.api.main:app --port 8000
+# 3. Frontend:
+cd strud/frontend && npm install && npm run dev
+```
+
+The adapter drives the real `StrudCLI` orchestration headlessly, so the web UI gets identical grounded answers, verification, and vision behaviour as the TUI. Chat history is persisted locally in the browser (localStorage); the backend stays stateless between restarts apart from in-memory per-chat conversation memory.
 
 ---
 
@@ -143,7 +159,9 @@ Benchmarks for grounding quality live in [tests/benchmark_grounding.py](tests/be
 - [ ] Additional A-Level science domains (Physics, Chemistry) on the existing router/retriever framework
 - [ ] Quiz progress tracking and spaced-repetition scheduling
 - [ ] Richer diagram understanding via the vision pipeline
-- [ ] Web UI alongside the TUI
+- [x] Web UI alongside the TUI ([strud/](strud/))
+- [ ] Server-side chat persistence (currently browser-local)
+- [ ] Streaming responses in the web UI (the JSON contract is streaming-ready)
 
 ---
 

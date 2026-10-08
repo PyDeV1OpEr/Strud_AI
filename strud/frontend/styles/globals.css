@@ -1,0 +1,211 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------
+   Strud AI — design tokens
+   Dark-first glassmorphism. Readability always wins.
+   ------------------------------------------------------------ */
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  --color-void: #070708;
+  --color-glass: rgb(255 255 255 / 0.045);
+  --color-glass-strong: rgb(255 255 255 / 0.075);
+  --color-hairline: rgb(255 255 255 / 0.1);
+  --color-hairline-soft: rgb(255 255 255 / 0.06);
+
+  --color-ink: #f4f5f7;
+  --color-ink-secondary: #b8bcc4;
+  --color-ink-muted: #7c818c;
+
+  --color-leaf: #6ee7b7;
+  --color-leaf-deep: #10b981;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-void);
+  color: var(--color-ink);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Atmospheric background: barely-there cool gradients over near-black. */
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      52rem 36rem at 82% -12%,
+      rgb(88 101 242 / 0.07),
+      transparent 60%
+    ),
+    radial-gradient(
+      46rem 32rem at -10% 30%,
+      rgb(52 211 153 / 0.045),
+      transparent 62%
+    ),
+    radial-gradient(
+      40rem 40rem at 50% 120%,
+      rgb(129 140 248 / 0.05),
+      transparent 65%
+    );
+}
+
+/* ---- glass surfaces ------------------------------------------------ */
+
+.glass {
+  background: var(--color-glass);
+  border: 1px solid var(--color-hairline);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.glass-strong {
+  background: var(--color-glass-strong);
+  border: 1px solid var(--color-hairline);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  /* soft internal highlight on the top edge */
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+/* ---- focus & selection --------------------------------------------- */
+
+::selection {
+  background: rgb(110 231 183 / 0.22);
+}
+
+:focus-visible {
+  outline: 2px solid rgb(110 231 183 / 0.6);
+  outline-offset: 2px;
+}
+
+/* ---- scrollbars ------------------------------------------------------ */
+
+.scroll-slim {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+}
+.scroll-slim::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.12);
+  border-radius: 999px;
+}
+.scroll-slim::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.2);
+}
+.scroll-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---- markdown (assistant answers) ----------------------------------- */
+
+.markdown-body {
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--color-ink);
+  word-break: break-word;
+}
+.markdown-body > * + * {
+  margin-top: 0.85em;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.35em;
+  color: var(--color-ink);
+}
+.markdown-body h1 { font-size: 1.35rem; }
+.markdown-body h2 { font-size: 1.2rem; }
+.markdown-body h3 { font-size: 1.05rem; }
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body li::marker {
+  color: var(--color-ink-muted);
+}
+.markdown-body strong {
+  color: #ffffff;
+  font-weight: 600;
+}
+.markdown-body a {
+  color: var(--color-leaf);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.markdown-body code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.875em;
+  background: rgb(255 255 255 / 0.07);
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+.markdown-body pre {
+  background: rgb(255 255 255 / 0.05);
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: 12px;
+  padding: 0.9em 1.1em;
+  overflow-x: auto;
+}
+.markdown-body pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.markdown-body blockquote {
+  border-left: 2px solid rgb(110 231 183 / 0.45);
+  padding-left: 1em;
+  color: var(--color-ink-secondary);
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.925rem;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--color-hairline-soft);
+  padding: 0.45em 0.7em;
+  text-align: left;
+}
+.markdown-body th {
+  background: rgb(255 255 255 / 0.04);
+  font-weight: 600;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+/* ---- reduced motion -------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
