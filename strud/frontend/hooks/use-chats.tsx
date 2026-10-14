@@ -13,6 +13,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   useSyncExternalStore,
@@ -25,6 +26,9 @@ import {
   sendMessage as apiSendMessage,
   ApiError,
   generateTitle,
+  fetchChats,
+  persistTitle,
+  moveChatToBin,
 } from "@/lib/api";
 import { chatStore } from "@/lib/store/chat-store";
 import { deriveTitle } from "@/lib/title";
@@ -47,7 +51,7 @@ interface ChatStoreValue {
   setComposerValue: (value: string) => void;
   newChat: () => void;
   selectChat: (id: string) => void;
-  deleteChat: (id: string) => void;
+  deleteChat: (id: string) => Promise<boolean>;
   clearError: () => void;
 
   addAttachment: (file: File) => void;
@@ -103,6 +107,21 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     chatStore.getServerSnapshot,
   );
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetchChats(getUserId()).then((serverChats) => {
+      if (cancelled || serverChats.length === 0) return;
+      const local = chatStore.getSnapshot();
+      const serverIds = new Set(serverChats.map((chat) => chat.id));
+      // Retain old browser-only chats while allowing durable server history
+      // (including attachments) to be the source of truth for matching IDs.
+      chatStore.set([...serverChats, ...local.filter((chat) => !serverIds.has(chat.id))]);
+    }).catch(() => {
+      // Offline cache remains usable while the backend is unavailable.
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   // undefined = auto (follow the most recent chat), null = explicit
   // "new chat" view, string = explicitly selected chat.
   const [explicitActiveId, setActiveChatId] = useState<string | null | undefined>(
@@ -130,12 +149,17 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     setError(null);
   }, []);
 
-  const deleteChat = useCallback((id: string) => {
-    const next = chatStore.getSnapshot().filter((chat) => chat.id !== id);
-    chatStore.set(next);
-    setActiveChatId((active) =>
-      active === id ? (next[0]?.id ?? null) : active,
-    );
+  const deleteChat = useCallback(async (id: string) => {
+    try {
+      await moveChatToBin(id, getUserId());
+      const next = chatStore.getSnapshot().filter((chat) => chat.id !== id);
+      chatStore.set(next);
+      setActiveChatId((active) => active === id ? (next[0]?.id ?? null) : active);
+      return true;
+    } catch {
+      setError("Strud couldn't move that chat to the Recycle Bin.");
+      return false;
+    }
   }, []);
 
   // ---- attachments ----
@@ -239,6 +263,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           chatId,
           userId: getUserId(),
           message: trimmed,
+          ...(title ? { title } : {}),
           ...(encodedAttachments.length ? { attachments: encodedAttachments } : {}),
         });
 
@@ -279,13 +304,16 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       if (isFirstMessage && trimmed) {
         void generateTitle(chatId, trimmed).then((backendTitle) => {
           if (!backendTitle) return;
+          const meaningful = backendTitle.trim();
+          if (!meaningful || /^(new chat|untitled|chat \d+)$/i.test(meaningful)) return;
           chatStore.set(
             chatStore
               .getSnapshot()
               .map((chat) =>
-                chat.id === chatId ? { ...chat, title: backendTitle } : chat,
+                chat.id === chatId ? { ...chat, title: meaningful } : chat,
               ),
           );
+          void persistTitle(chatId, getUserId(), meaningful);
         });
       }
     },

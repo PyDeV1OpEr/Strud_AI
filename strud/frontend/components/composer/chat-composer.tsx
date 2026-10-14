@@ -137,6 +137,13 @@ export function ChatComposer({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={(event) => {
+            const files = event.clipboardData.files;
+            if (files.length > 0) {
+              event.preventDefault();
+              handleFiles(files);
+            }
+          }}
           placeholder="Ask Strud anything..."
           className="scroll-slim max-h-[180px] flex-1 resize-none bg-transparent py-2.5 text-[15px] leading-relaxed text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-muted)]"
         />

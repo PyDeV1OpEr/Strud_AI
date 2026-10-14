@@ -178,6 +178,10 @@ body {
   padding-left: 1em;
   color: var(--color-ink-secondary);
 }
+.markdown-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
 .markdown-body table {
   width: 100%;
   border-collapse: collapse;

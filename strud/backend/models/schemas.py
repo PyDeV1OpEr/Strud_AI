@@ -21,6 +21,7 @@ class ChatRequestBody(BaseModel):
     # Authentication can replace this with the authenticated subject later.
     userId: str = Field(alias="userId", min_length=1, max_length=200)
     message: str = ""
+    title: str = ""
     attachments: Optional[list[AttachmentIn]] = None
 
 
@@ -33,6 +34,13 @@ class ChatResponseBody(BaseModel):
     messageId: str
     content: str
     sources: Optional[list[SourceOut]] = None
+
+
+class ChatTitleUpdateBody(BaseModel):
+    userId: str = Field(alias="userId", min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=80)
+
+    model_config = {"populate_by_name": True}
 
 
 class TitleRequestBody(BaseModel):

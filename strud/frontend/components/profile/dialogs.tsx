@@ -94,17 +94,17 @@ export function DeleteChatDialog({
   return (
     <Dialog open={open} onClose={onCancel} labelledBy="delete-title">
       <h2 id="delete-title" className="text-base font-semibold text-[var(--color-ink)]">
-        Delete this chat?
+        Move this chat to the Recycle Bin?
       </h2>
       <p className="mt-1.5 text-[14px] text-[var(--color-ink-secondary)]">
-        {chatTitle ? `“${chatTitle}” will be permanently removed.` : "This conversation will be permanently removed."}
+        {chatTitle ? `“${chatTitle}” will be kept in Recently Deleted until you permanently remove it.` : "This conversation can be restored from Recently Deleted."}
       </p>
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
-        <Button variant="danger" onClick={onConfirm}>
-          Delete
+        <Button variant="danger" onClick={onConfirm} autoFocus>
+          Move to Bin
         </Button>
       </div>
     </Dialog>

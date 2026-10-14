@@ -1,5 +1,7 @@
 # Strud AI — Frontend
 
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org/) [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111111)](https://react.dev/) [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+
 A premium, dark-first glassmorphism chat interface for **Strud**, an AI-powered
 Biology learning assistant. Built with Next.js, React, TypeScript, Tailwind CSS,
 Lucide icons, and Motion for React.
@@ -24,9 +26,11 @@ npm run dev        # http://localhost:3000 (or the port Next.js prints)
 | `npm run build`   | Production build + typecheck     |
 | `npm run lint`    | ESLint                           |
 | `npm run start`   | Serve the production build       |
+| `npm run test:markdown` | Markdown rendering regressions (offline) |
 
-Without a backend running, the app works in **local preview mode**: messages get
-a friendly placeholder response so the entire UI is usable offline.
+The app requires the FastAPI backend for AI responses and durable chat operations.
+If the backend is unavailable, the frontend keeps its local cache and displays a
+friendly connection error.
 
 ## Environment variables
 
@@ -49,7 +53,7 @@ the backend is down, messages show a friendly connection error instead.
 frontend/
 ├── app/                     # Next.js App Router (layout + page)
 ├── components/
-│   ├── chat/                # Layout shell, message list, bubbles, sources, typing
+│   ├── chat/                # Messages, sources, typing, and Recycle Bin
 │   ├── composer/            # Glass composer + image attachment handling
 │   ├── sidebar/             # Brand, new chat, search, grouped history
 │   ├── profile/             # Logo, profile menu, About/Settings dialogs
@@ -57,7 +61,7 @@ frontend/
 ├── hooks/
 │   └── use-chats.tsx        # ChatStoreProvider — single source of app state
 ├── lib/
-│   ├── api/                 # THE network boundary (fetch + local preview mode)
+│   ├── api/                 # Network boundary for chat, history, and bin operations
 │   ├── store/               # External store + localStorage persistence
 │   ├── group-chats.ts       # Today / Yesterday / Previous 7 Days / Older
 │   └── title.ts             # Chat title derivation
@@ -74,9 +78,9 @@ frontend/
 - **UI state** (active chat, composer text, pending attachments, errors) stays
   in React state inside `hooks/use-chats.tsx`, exposed via
   `ChatStoreProvider` / `useChatStore()`.
-- **Persistence** is localStorage (`strud.chats.v1`) through
-  `lib/store/local-chats.ts` — the only module that touches storage. When the
-  backend later exposes chat CRUD, only this layer changes.
+- **Persistence** is server-backed through `lib/api/chats.ts`: SQLite stores chat
+  metadata, messages, titles, soft-deletion state, and attachment references.
+  `localStorage` remains an offline cache rather than the source of truth.
 
 ### Component flow
 
@@ -129,6 +133,20 @@ Non-2xx responses surface as a friendly inline error message on the reply.
 ### `GET /api/health`
 
 Used by the adapter to confirm LM Studio reachability.
+
+### Chat persistence and Recycle Bin
+
+- `PATCH /api/chats/{chat_id}/title` persists a generated chat title.
+- `GET /api/chats?user_id=...` returns active chats and durable messages.
+- `GET /api/chats/deleted?user_id=...` returns Recently Deleted chats.
+- `DELETE /api/chats/{chat_id}?user_id=...` moves a chat to the bin.
+- `POST /api/chats/{chat_id}/restore?user_id=...` restores the original chat ID.
+- `DELETE /api/chats/{chat_id}/permanent?user_id=...` permanently removes a bin item.
+- `DELETE /api/chats/deleted/all?user_id=...` empties the bin.
+- `GET /api/uploads/{filename}` serves validated persisted image uploads.
+
+The backend creates and migrates `strud_cache/strud_memory_v3.db` additively. It
+does not delete user-level memory when a chat is permanently deleted.
 
 ## Running with the real backend
 

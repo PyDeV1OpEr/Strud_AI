@@ -4,10 +4,18 @@
 
 Strud is an end-to-end, privacy-first tutoring system. A local LLM (GPT-OSS 20B served by LM Studio) produces every answer; a hybrid retrieval engine grounds each Biology response in page-cited passages from the official A-Level resource book; an internal answer-intelligence layer shapes *how* each answer is taught; and a silent verification service checks every reply against retrieved evidence before the student sees it. The same pipeline powers a polished terminal UI and a modern web chat interface.
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
-[![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688)](https://fastapi.tiangolo.com)
-[![LM Studio](https://img.shields.io/badge/LLM-GPT--OSS%2020B-orange)](https://lmstudio.ai)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![JavaScript](https://img.shields.io/badge/JavaScript-ES2022-F7DF1E?logo=javascript&logoColor=111111)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111111)](https://react.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![LangChain](https://img.shields.io/badge/LangChain-1.x-1C3C3C)](https://docs.langchain.com/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.x-1C3C3C)](https://langchain-ai.github.io/langgraph/)
+[![SQLite](https://img.shields.io/badge/SQLite-persistent_storage-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](https://docs.pytest.org/)
+[![LM Studio](https://img.shields.io/badge/local_models-LM_Studio-orange)](https://lmstudio.ai/)
 
 ---
 
@@ -28,25 +36,28 @@ Strud is under active development. It is not hallucination-free — it is *hallu
 flowchart TD
     U[Student] --> F[Next.js 16 Frontend<br/>glass chat UI]
     U --> TUI[Terminal UI<br/>Rich TUI]
-    F -->|HTTP JSON| API[FastAPI Adapter<br/>strud/backend]
-    TUI --> CLI[CLI Controller<br/>cli/interface.py]
-    API --> CLI
+    F -->|HTTP JSON| API[FastAPI API<br/>strud/backend/api]
+    TUI --> GRAPH[LangGraph tutoring workflow]
+    API --> GRAPH
 
-    CLI --> IG[Injection Guard]
-    CLI --> ID[Identity / Capability]
-    CLI --> SR[Semantic Router<br/>intent + needs_retrieval]
+    GRAPH --> IG[Identity + injection rules]
+    GRAPH --> ID[Memory + quiz routing]
+    GRAPH --> SR[Semantic Router<br/>intent + needs_retrieval]
     SR --> RET[Biology Retriever<br/>TF-IDF · BM25 · MiniLM over<br/>A-Level textbook, RRF fusion]
     RET --> ES[Evidence Sufficiency<br/>can this evidence answer the question?]
-    ES --> PL[Answer Intelligence<br/>type · depth · tutoring mode]
+    ES --> PL[Answer planning<br/>type · depth · tutoring mode]
     PL --> LLM[GPT-OSS 20B<br/>local OpenAI-compatible API]
     RET -.->|textbook pages| V[Qwen3-VL 8B<br/>diagram analysis]
     V -.-> PL
     LLM --> VER[Silent Verification<br/>revise if unsupported]
     VER -->|grounded answer + page sources| API
+    GRAPH --> DB[(SQLite<br/>history · memory · quizzes)]
+    API --> STORE[(uploads/)]
+    GRAPH --> F
     API --> F
 ```
 
-The web adapter instantiates the **same** CLI controller headlessly — it does not reimplement any AI behaviour. The chat flow in both interfaces is: injection check → identity handling → semantic routing → (optional) retrieval → evidence evaluation → answer planning → GPT-OSS generation → silent verification → response with sources.
+The web API and the terminal application share the tutoring components, while the web API currently invokes the typed LangGraph workflow directly. The chat flow is: context loading → routing → optional retrieval → evidence evaluation → answer planning → local model generation → validation → durable persistence → response with sources.
 
 ---
 
@@ -59,7 +70,7 @@ The web adapter instantiates the **same** CLI controller headlessly — it does 
 | LLM | `openai/gpt-oss-20b` served through [LM Studio](https://lmstudio.ai) at `http://localhost:1234/v1` (OpenAI-compatible API) |
 | Vision | `qwen/qwen3-vl-8b` via LM Studio (enabled in `vision_config.json`; used for textbook diagrams and student-uploaded images) |
 | Retrieval | scikit-learn TF-IDF (sparse) · hand-rolled BM25 (sparse lexical, Phase 1) · `sentence-transformers/all-MiniLM-L6-v2` dense embeddings · Reciprocal Rank Fusion (`RRF_K=60`, weighted per leg) · phrase boosting · neighbour-page expansion |
-| Persistence | **Frontend:** browser `localStorage` (chat history, key `strud.chats.v1`). **Backend:** pickle/NumPy retrieval caches in `strud_cache/`, in-memory per-chat pipeline sessions. No database yet — see [Planned](#planned). |
+| Persistence | SQLite via Python `sqlite3` (`strud_cache/strud_memory_v3.db`) for chats, messages, user memory, quiz records, soft-deletion state, and attachment metadata; durable image files in `strud_cache/uploads/`; retrieval indexes in `strud_cache/`. Browser `localStorage` remains an offline cache. |
 | Tooling | ESLint 9, Rich (TUI), PyMuPDF (PDF processing), MLX (fine-tuning, Apple Silicon) |
 
 ---
@@ -134,16 +145,17 @@ The Web UI renders these as a collapsible **Sources** chip ("Biology Resource Bo
 **Implemented**
 
 - Chat interface with markdown-rendered assistant replies
-- New chat, chat switching, chat search, delete with confirmation dialog
-- Persistent chat history grouped Today / Yesterday / Previous 7 Days / Older
-- Image attachments (png/jpeg/webp ≤ 8 MB) with thumbnail preview
+- New chat, chat switching, chat search, soft-delete with confirmation dialog
+- Server-backed chat history grouped Today / Yesterday / Previous 7 Days / Older
+- Recently Deleted / Recycle Bin: preview, restore, permanent delete, and empty-bin confirmation
+- Image attachments (PNG/JPEG/WebP ≤ 8 MB) with thumbnail preview and durable upload storage
 - Collapsible page-cited Sources
 - Typing indicator, copy-response action, friendly error states
 - Responsive layout: floating sidebar on desktop, animated drawer on mobile
 - Reduced-motion support, labelled controls, keyboard-operable menus
-- Title generation via the backend (`/api/title`)
+- First-message title generation with durable SQLite title metadata
 
-**Not implemented (yet)**: streaming responses, server-side chat persistence, authentication.
+**Not implemented (yet)**: streaming responses and authentication.
 
 ```text
 frontend/                          backend/
@@ -152,7 +164,7 @@ frontend/                          backend/
         └──────── API client (lib/api) ────┘
 ```
 
-The frontend never loads a model and never computes Biology content; it only renders what `POST /api/chat` returns.
+The frontend never loads a model and never computes Biology content; it renders the responses and durable chat records returned by the FastAPI API. Browser storage is retained only as an offline cache.
 
 ---
 
@@ -163,15 +175,15 @@ Fully implemented through the pipeline's vision path:
 ```text
 Image attached in UI
   → base64 in the chat request
-  → FastAPI adapter decodes to a temp file
-  → CLI controller loads it into the chat context
+  → FastAPI validates and writes a UUID-named file to strud_cache/uploads/
+  → the tutoring graph receives the persisted attachment reference
   → Qwen3-VL 8B analyses the image + extracts Biology concepts
   → question + concepts → textbook retrieval
   → GPT-OSS 20B composes the grounded answer
   → sources reflect the pages actually retrieved
 ```
 
-Vision is gated by `vision_config.json` (`"enabled": true`) and requires the `qwen/qwen3-vl-8b` model to be loaded in LM Studio. Without it, the chat and retrieval pipeline still work; image questions degrade gracefully.
+Vision is gated by `vision_config.json` (`"enabled": true`) and requires the `qwen/qwen3-vl-8b` model to be loaded in LM Studio. Without it, text chat and retrieval still work. Persisted image records remain associated with their original messages and are served through `/api/uploads/{filename}`.
 
 ---
 
@@ -180,10 +192,18 @@ Vision is gated by `vision_config.json` (`"enabled": true`) and requires the `qw
 | Method | Endpoint | Purpose |
 | ------ | -------- | ------- |
 | GET  | `/api/health` | Backend status: LLM reachable, textbook index loaded, active model |
-| POST | `/api/chat`   | Send a question `{chatId, message, attachments?}` → `{messageId, content, sources?}` |
+| POST | `/api/chat`   | Send a question `{chatId, userId, title?, message, attachments?}` → `{messageId, content, sources?}` |
 | POST | `/api/title`  | Derive a short chat title `{chatId, message}` → `{title}` |
+| PATCH | `/api/chats/{chat_id}/title` | Persist a chat title `{userId, title}` in SQLite |
+| GET  | `/api/chats` | List active chats with durable messages and attachment metadata |
+| GET  | `/api/chats/deleted` | List chats in Recently Deleted |
+| DELETE | `/api/chats/{chat_id}` | Move one active chat to the Recycle Bin |
+| POST | `/api/chats/{chat_id}/restore` | Restore a deleted chat with its original ID |
+| DELETE | `/api/chats/{chat_id}/permanent` | Permanently delete one deleted chat and owned uploads |
+| DELETE | `/api/chats/deleted/all` | Permanently delete all chats currently in the bin |
+| GET  | `/api/uploads/{filename}` | Serve a validated persisted image upload |
 
-There are deliberately no chat CRUD endpoints — chat history lives in the browser. Persistence is isolated behind `strud/frontend/lib/api/chats.ts`, so a database backend can be added without touching components.
+Chat CRUD and Recycle Bin operations are server-backed. The frontend keeps the API boundary in `strud/frontend/lib/api/chats.ts` and falls back to local browser state only when the backend is unavailable.
 
 ---
 
@@ -215,7 +235,10 @@ There are deliberately no chat CRUD endpoints — chat history lives in the brow
 │       └── types/               # shared TS contracts
 ├── tests/                       # unit tests + grounding/retrieval benchmarks
 ├── experiments/                 # LoRA behaviour fine-tuning (see below)
-└── strud_cache/                 # retrieval index caches (git-ignored)
+└── strud_cache/                 # git-ignored runtime data (created automatically)
+    ├── strud_memory_v3.db       # SQLite chats, memory, quizzes, deletion state
+    ├── strud_checkpoints.db     # LangGraph checkpoints
+    └── uploads/                 # validated persisted chat images
 ```
 
 ---
@@ -236,8 +259,7 @@ git clone https://github.com/PyDeV1OpEr/Strud_AI.git
 cd Strud_AI
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt          # pipeline dependencies
-pip install "fastapi>=0.115" "uvicorn[standard]"   # web adapter
+pip install -r requirements.txt -r strud/backend/requirements.txt
 # optional — dense retrieval leg (auto-detected if installed; the
 # pipeline degrades to sparse-only if it's absent):
 pip install sentence-transformers        # pulls torch; heavy install
@@ -264,7 +286,7 @@ Start LM Studio's local server with `openai/gpt-oss-20b` loaded (port 1234). Ret
 source .venv/bin/activate
 .venv/bin/python -m uvicorn strud.backend.api.main:app --host 127.0.0.1 --port 8000
 ```
-First start builds the textbook index if `strud_cache/` is empty (a few minutes; afterwards it loads from cache). `GET /api/health` returns `{"ok": true, "llmAvailable": true, "textbookLoaded": true}` when everything is connected.
+First start builds the textbook index if `strud_cache/` is empty (a few minutes; afterwards it loads from cache). It also creates the SQLite database and upload directory automatically. `GET /api/health` returns `{"ok": true, "llmAvailable": true, "textbookLoaded": true}` when everything is connected.
 
 **Terminal 3 — Next.js frontend**
 ```bash
@@ -288,6 +310,12 @@ python main.py
 | `NEXT_PUBLIC_BACKEND_URL` | frontend (`strud/frontend/.env.local`) | `http://localhost:8000` | Base URL of the FastAPI adapter |
 
 No other variables are required. No API keys exist anywhere in the project — the LLM is local. The model/feature switches (`MODEL`, `VISION_*`, retrieval thresholds, `RETRIEVAL_MODE`) live in `config.py`, `assistant_config.json` and `vision_config.json`, not in environment files. No `.env` files are committed.
+
+### Persistence and migrations
+
+The backend uses standard-library SQLite and performs additive schema setup on startup. Existing `strud_cache/strud_memory_v3.db` files are migrated without deleting conversations: chat metadata is backfilled, then `deleted_at` and attachment metadata columns are added when absent. Chats moved to Recently Deleted retain their original IDs, messages, titles, and image references until permanent deletion. Permanent deletion removes only the deleted chat and its UUID-owned upload files; user-level memory remains intact.
+
+For a clean development environment, it is safe to remove the generated `strud_cache/` directory while the backend is stopped; the textbook indexes and databases will be rebuilt. Do not commit that directory.
 
 ---
 
@@ -319,7 +347,6 @@ No other variables are required. No API keys exist anywhere in the project — t
 - Iterating on the behaviour fine-tuning loop (dataset, benchmark scoring, results in `experiments/results/`)
 
 ### Planned
-- Server-side chat persistence (database-backed) behind the existing `lib/api/chats.ts` boundary
 - Token streaming in the web UI (backend currently returns complete JSON per answer)
 - Additional A-Level domains (Physics, Chemistry) on the same router/retriever framework
 - Production deployment story (packaging, process supervision)
@@ -328,20 +355,19 @@ No other variables are required. No API keys exist anywhere in the project — t
 
 ## Roadmap
 
-1. **Durable chat memory** — move chat history server-side (D1/SQLite or Postgres) while keeping the current API shape.
-2. **Streaming** — switch the adapter to SSE once `llm_client.chat` gains a streaming mode; frontend changes are confined to `lib/api/chat.ts`.
-3. **Retrieval evaluation** — expand `tests/benchmark_retrieval.py` coverage and add a small HTML eval report.
-4. **Richer citations** — quoted page excerpts alongside page numbers, with click-through context.
-5. **Expanded resources** — past papers and revision guides as additional indexed corpora.
-6. **Authentication & multi-user** — only when persistence lands; intentionally deferred.
+1. **Streaming** — switch the adapter to SSE once `llm_client.chat` gains a streaming mode; frontend changes are confined to `lib/api/chat.ts`.
+2. **Retrieval evaluation** — expand `tests/benchmark_retrieval.py` coverage and add a small HTML eval report.
+3. **Richer citations** — quoted page excerpts alongside page numbers, with click-through context.
+4. **Expanded resources** — past papers and revision guides as additional indexed corpora.
+5. **Authentication & multi-user** — replace the stable local browser identity with authenticated subjects before exposing the service beyond loopback.
 
 ---
 
 ## Engineering Notes
 
 - **Separation of concerns.** Frontend = presentation + interaction. FastAPI = HTTP boundary + sessions. `cli/interface.py` = orchestration. Retrieval/verification/vision = intelligence. The web adapter holds no AI logic; swapping GPT-OSS 20B for another OpenAI-compatible model is a one-line config change.
-- **One pipeline, two frontends.** The adapter drives the real `StrudCLI` through a capturing renderer, so web and terminal behaviour can never drift — including injection handling and verification.
-- **Per-chat sessions.** Each chat id gets its own headless CLI session (own `BiologyEngine` history + `ConversationMemory`), matching how the terminal app behaves across a conversation.
+- **Shared tutoring layers.** The terminal and web paths share routing, retrieval, verification, vision, and memory components; the web API invokes the LangGraph workflow directly.
+- **Per-chat state.** Each chat id is scoped by `user_id` in SQLite and LangGraph checkpoints. Messages, title metadata, soft-deletion state, and attachment references survive backend restarts.
 - **Measured grounding.** Grounding thresholds are calibrated constants with benchmark scripts behind them — see `tests/benchmark_grounding.py` and the rationale comments in `config.py`.
 - **Fallback chain.** If the semantic router's LLM call fails, a rule-based router takes over; if a retrieval leg is unavailable (e.g. embeddings not built), the pipeline degrades to the remaining legs instead of failing.
 
@@ -363,6 +389,12 @@ Design decision: **facts live in the retriever, behaviour lives in the fine-tune
 ## Testing
 
 ```bash
+# offline regression suites (no textbook index or LM Studio needed):
+.venv/bin/python tests/test_memory_and_quiz.py            # tutoring graph structure + quiz logic
+.venv/bin/python -m pytest strud/backend/test_chat_persistence.py      # titles, attachments, Recycle Bin
+.venv/bin/python -m pytest strud/backend/test_response_formatting.py   # answer-formatting contract
+
+# suites that need the built index and/or LM Studio:
 python tests/test_hybrid_retrieval.py        # TF-IDF + BM25 + dense fusion
 python tests/test_conversation_architecture.py
 python tests/test_vision_pipeline.py
@@ -371,7 +403,9 @@ python tests/benchmark_grounding.py          # grounding thresholds
 python tests/benchmark_retrieval.py          # retrieval quality
 ```
 
-Frontend: `cd strud/frontend && npm run lint && npm run build`.
+Frontend: `cd strud/frontend && npm run lint && npm run build && npm run test:markdown`.
+
+The backend regression suites use `pytest`, which is already included in `strud/backend/requirements.txt`.
 
 ---
 
@@ -379,7 +413,7 @@ Frontend: `cd strud/frontend && npm run lint && npm run build`.
 
 - The LLM, embeddings and retrieval index run locally — no conversation ever leaves the machine.
 - Textbook PDFs, model checkpoints and index caches are git-ignored and never uploaded.
-- Chat history is stored only in the student's browser (`localStorage`); the backend keeps conversation memory in RAM only.
+- Chat history, titles, memory, quiz records, deletion state, and attachment metadata are stored in SQLite; uploaded images live in the git-ignored `strud_cache/uploads/` directory. Browser `localStorage` is only an offline cache.
 - The injection guard and verification layer operate entirely offline.
 
 ---

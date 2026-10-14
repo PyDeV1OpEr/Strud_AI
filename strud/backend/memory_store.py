@@ -23,6 +23,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 _TABLES = [
+    """CREATE TABLE IF NOT EXISTS chats (
+        user_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT 'New chat',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, chat_id)
+    )""",
     # --- A) per-conversation message history -------------------
     """CREATE TABLE IF NOT EXISTS conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,6 +130,22 @@ class MemoryStore:
         with _LOCK, self._conn() as conn:
             for stmt in _TABLES:
                 conn.execute(stmt)
+            # SQLite migrations for installations created before attachments.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)")}
+            if "attachments_json" not in columns:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            chat_columns = {row["name"] for row in conn.execute("PRAGMA table_info(chats)")}
+            if "deleted_at" not in chat_columns:
+                conn.execute("ALTER TABLE chats ADD COLUMN deleted_at TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_chats_deleted ON chats (user_id, deleted_at, updated_at)")
+            # Preserve conversations created before chat metadata existed.
+            conn.execute(
+                "INSERT OR IGNORE INTO chats (user_id, chat_id, title, created_at, updated_at) "
+                "SELECT user_id, chat_id, 'New chat', MIN(created_at), MAX(created_at) "
+                "FROM conversations GROUP BY user_id, chat_id"
+            )
 
     def _conn(self) -> sqlite3.Connection:
         return _connect(self.db_path)
@@ -136,12 +160,13 @@ class MemoryStore:
         user_id: str,
         role: str,
         content: str,
+        attachments: Optional[list[dict]] = None,
     ) -> int:
         with _LOCK, self._conn() as conn:
             cursor = conn.execute(
-                "INSERT INTO conversations (user_id, chat_id, role, content, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (user_id, chat_id, role, (content or "").strip(), _now()),
+                "INSERT INTO conversations (user_id, chat_id, role, content, attachments_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, chat_id, role, (content or "").strip(), json.dumps(attachments or []), _now()),
             )
             return cursor.lastrowid or 0
 
@@ -153,15 +178,88 @@ class MemoryStore:
     ) -> list[dict]:
         with _LOCK, self._conn() as conn:
             rows = conn.execute(
-                "SELECT role, content, created_at FROM conversations "
+                "SELECT role, content, attachments_json, created_at FROM conversations "
                 "WHERE chat_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?",
                 (chat_id, user_id, limit),
             ).fetchall()
         rows.reverse()
         return [
-            {"role": r["role"], "content": r["content"], "created_at": r["created_at"]}
+            {"role": r["role"], "content": r["content"], "attachments": json.loads(r["attachments_json"] or "[]"), "created_at": r["created_at"]}
             for r in rows
         ]
+
+    def ensure_chat(self, chat_id: str, user_id: str, title: str = "") -> None:
+        """Create chat metadata once; never replace a meaningful saved title."""
+        now = _now()
+        fallback = ((title or "New chat").strip() or "New chat")[:80]
+        with _LOCK, self._conn() as conn:
+            conn.execute(
+                "INSERT INTO chats (user_id, chat_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, chat_id) DO UPDATE SET updated_at = excluded.updated_at, "
+                "title = CASE WHEN chats.title IN ('', 'New chat', 'New Chat', 'Untitled') "
+                "AND excluded.title NOT IN ('', 'New chat', 'New Chat', 'Untitled') THEN excluded.title ELSE chats.title END",
+                (user_id, chat_id, fallback, now, now),
+            )
+
+    def update_chat_title(self, chat_id: str, user_id: str, title: str) -> None:
+        title = (title or "").strip()[:80]
+        if not title:
+            return
+        self.ensure_chat(chat_id, user_id, title)
+        with _LOCK, self._conn() as conn:
+            conn.execute("UPDATE chats SET title = ?, updated_at = ? WHERE user_id = ? AND chat_id = ?", (title, _now(), user_id, chat_id))
+
+    def list_chats(self, user_id: str, deleted: bool = False) -> list[dict]:
+        with _LOCK, self._conn() as conn:
+            rows = conn.execute(
+                "SELECT chat_id, title, created_at, updated_at, deleted_at FROM chats "
+                "WHERE user_id = ? AND deleted_at IS " + ("NOT NULL" if deleted else "NULL") + " "
+                "ORDER BY " + ("deleted_at DESC" if deleted else "updated_at DESC"),
+                (user_id,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            result.append({**dict(row), "messages": self.get_history(row["chat_id"], user_id)})
+        return result
+
+    def is_chat_deleted(self, chat_id: str, user_id: str) -> bool:
+        with _LOCK, self._conn() as conn:
+            row = conn.execute("SELECT deleted_at FROM chats WHERE user_id = ? AND chat_id = ?", (user_id, chat_id)).fetchone()
+        return row is not None and row["deleted_at"] is not None
+
+    def move_chat_to_bin(self, chat_id: str, user_id: str) -> bool:
+        with _LOCK, self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE chats SET deleted_at = ?, updated_at = ? WHERE user_id = ? AND chat_id = ? AND deleted_at IS NULL",
+                (_now(), _now(), user_id, chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def restore_chat(self, chat_id: str, user_id: str) -> bool:
+        with _LOCK, self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE chats SET deleted_at = NULL, updated_at = ? WHERE user_id = ? AND chat_id = ? AND deleted_at IS NOT NULL",
+                (_now(), user_id, chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def permanently_delete_chat(self, chat_id: str, user_id: str) -> list[dict] | None:
+        """Remove a bin item and return its owned attachment references."""
+        with _LOCK, self._conn() as conn:
+            row = conn.execute("SELECT 1 FROM chats WHERE user_id = ? AND chat_id = ? AND deleted_at IS NOT NULL", (user_id, chat_id)).fetchone()
+            if row is None:
+                return None
+            rows = conn.execute("SELECT attachments_json FROM conversations WHERE user_id = ? AND chat_id = ?", (user_id, chat_id)).fetchall()
+            attachments = [item for row in rows for item in json.loads(row["attachments_json"] or "[]")]
+            conn.execute("DELETE FROM conversations WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+            conn.execute("DELETE FROM chats WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+            return attachments
+
+    def empty_bin(self, user_id: str) -> list[dict]:
+        attachments: list[dict] = []
+        for chat in self.list_chats(user_id, deleted=True):
+            attachments.extend(self.permanently_delete_chat(chat["chat_id"], user_id) or [])
+        return attachments
 
     def clear_conversation(self, chat_id: str, user_id: str) -> int:
         with _LOCK, self._conn() as conn:

@@ -21,7 +21,6 @@ import base64
 import io
 import logging
 import sys
-import tempfile
 import threading
 import uuid
 from contextlib import contextmanager
@@ -30,6 +29,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from rich.console import Console
 
 # ---- locate the existing Strud backend -----------------------------
@@ -40,7 +40,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from llm_client import LLMClient, check_lm_studio  # noqa: E402
-from config import MODEL  # noqa: E402
+from config import CACHE_DIR, MODEL  # noqa: E402
 from Science.Biology.biology_engine import BiologyEngine  # noqa: E402
 from Science.Biology.biology_retriever import (  # noqa: E402
     get_retriever_status,
@@ -54,6 +54,7 @@ from strud.backend.llm_chain import reset_chat_model  # noqa: E402
 from ..models.schemas import (  # noqa: E402
     ChatRequestBody,
     ChatResponseBody,
+    ChatTitleUpdateBody,
     SourceOut,
     TitleRequestBody,
     TitleResponseBody,
@@ -207,26 +208,32 @@ def _session_renderer(session: StrudCLI) -> CapturingRenderer:
 # helpers
 # ------------------------------------------------------------
 
-def _decode_attachments(request: ChatRequestBody) -> list[Path]:
-    """Writes uploaded base64 images to temp files for the vision path."""
+UPLOADS_DIR = CACHE_DIR / "uploads"
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+ALLOWED_IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+
+
+def _persist_attachments(request: ChatRequestBody) -> tuple[list[Path], list[dict]]:
+    """Validate uploads once and retain safe, browser-addressable copies."""
     paths: list[Path] = []
+    records: list[dict] = []
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     for attachment in request.attachments or []:
         try:
-            raw = base64.b64decode(attachment.data)
-            suffix = {
-                "image/png": ".png",
-                "image/jpeg": ".jpg",
-                "image/webp": ".webp",
-            }.get(attachment.mimeType, ".png")
-            handle = tempfile.NamedTemporaryFile(
-                delete=False, suffix=suffix, prefix="strud_upload_"
-            )
-            handle.write(raw)
-            handle.close()
-            paths.append(Path(handle.name))
+            suffix = ALLOWED_IMAGE_TYPES.get(attachment.mimeType)
+            if not suffix:
+                raise ValueError("unsupported image type")
+            raw = base64.b64decode(attachment.data, validate=True)
+            if not raw or len(raw) > MAX_IMAGE_BYTES:
+                raise ValueError("image is empty or too large")
+            filename = f"{uuid.uuid4()}{suffix}"
+            path = UPLOADS_DIR / filename
+            path.write_bytes(raw)
+            paths.append(path)
+            records.append({"id": filename, "url": f"/api/uploads/{filename}", "name": attachment.name[:255], "mimeType": attachment.mimeType, "size": len(raw)})
         except Exception:  # noqa: BLE001 — skip malformed uploads
             logger.warning("Skipping malformed attachment %r", attachment.name)
-    return paths
+    return paths, records
 
 
 # ------------------------------------------------------------
@@ -234,6 +241,8 @@ def _decode_attachments(request: ChatRequestBody) -> list[Path]:
 # ------------------------------------------------------------
 
 app = FastAPI(title="Strud AI API", version="0.2.0")
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/api/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 # The Next.js dev server may bind to any free port; allow loopback only.
 app.add_middleware(
@@ -284,7 +293,11 @@ def chat(request: ChatRequestBody) -> ChatResponseBody:
     graph = _get_graph()
     question = (request.message or "").strip()
     user_id = request.userId.strip()
-    image_paths = _decode_attachments(request)
+    image_paths, attachments = _persist_attachments(request)
+    store = get_memory_store()
+    if store.is_chat_deleted(request.chatId, user_id):
+        raise HTTPException(status_code=409, detail="This chat is in the Recycle Bin. Restore it before sending a message.")
+    store.ensure_chat(request.chatId, user_id, request.title)
     image_context = ""
 
     try:
@@ -313,6 +326,7 @@ def chat(request: ChatRequestBody) -> ChatResponseBody:
                     "user_id": user_id,
                     "question": question,
                     "image_context": image_context,
+                    "attachments": attachments,
                 },
                 # LangGraph's checkpoint key must include the user too. Chat
                 # ids are client-generated and can collide across browsers.
@@ -320,6 +334,8 @@ def chat(request: ChatRequestBody) -> ChatResponseBody:
             )
     except RuntimeError as error:
         # LLMClient raises RuntimeError when LM Studio is unreachable.
+        for path in image_paths:
+            path.unlink(missing_ok=True)
         logger.error("chat failed: %s", error)
         raise HTTPException(status_code=503, detail=str(error)) from error
     except Exception as error:
@@ -327,15 +343,13 @@ def chat(request: ChatRequestBody) -> ChatResponseBody:
         # swapped in LM Studio) must surface as 503, not a bare 500 —
         # and drop the cached ChatOpenAI so the next turn reconnects.
         reset_chat_model()
+        for path in image_paths:
+            path.unlink(missing_ok=True)
         logger.error("chat failed (non-runtime): %s", error)
         raise HTTPException(
             status_code=503,
             detail="The AI engine rejected the request (is the configured model loaded in LM Studio?).",
         ) from error
-    finally:
-        for path in image_paths:
-            path.unlink(missing_ok=True)
-
     content = (result.get("answer") or "").strip() if result else ""
     if not content:
         raise HTTPException(status_code=502, detail="The pipeline produced no response.")
@@ -352,6 +366,60 @@ def chat(request: ChatRequestBody) -> ChatResponseBody:
         content=content,
         sources=sources,
     )
+
+
+def _remove_owned_uploads(attachments: list[dict]) -> None:
+    for attachment in attachments:
+        filename = Path(str(attachment.get("url", ""))).name
+        path = UPLOADS_DIR / filename
+        if path.parent == UPLOADS_DIR and path.is_file():
+            path.unlink(missing_ok=True)
+
+
+@app.get("/api/chats")
+def list_chats(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    return {"chats": get_memory_store().list_chats(user_id)}
+
+
+@app.get("/api/chats/deleted")
+def list_deleted_chats(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    return {"chats": get_memory_store().list_chats(user_id, deleted=True)}
+
+
+@app.delete("/api/chats/{chat_id}")
+def move_chat_to_bin(chat_id: str, user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    if not get_memory_store().move_chat_to_bin(chat_id, user_id):
+        raise HTTPException(status_code=404, detail="Active chat not found.")
+    return {"ok": True}
+
+
+@app.post("/api/chats/{chat_id}/restore")
+def restore_chat(chat_id: str, user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    if not get_memory_store().restore_chat(chat_id, user_id):
+        raise HTTPException(status_code=404, detail="Deleted chat not found.")
+    return {"ok": True}
+
+
+@app.delete("/api/chats/{chat_id}/permanent")
+def permanently_delete_chat(chat_id: str, user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    attachments = get_memory_store().permanently_delete_chat(chat_id, user_id)
+    if attachments is None:
+        raise HTTPException(status_code=404, detail="Deleted chat not found.")
+    _remove_owned_uploads(attachments)
+    return {"ok": True}
+
+
+@app.delete("/api/chats/deleted/all")
+def empty_bin(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    attachments = get_memory_store().empty_bin(user_id)
+    _remove_owned_uploads(attachments)
+    return {"ok": True}
+
+
+@app.patch("/api/chats/{chat_id}/title")
+def update_chat_title(chat_id: str, request: ChatTitleUpdateBody) -> dict:
+    get_memory_store().update_chat_title(chat_id, request.userId, request.title)
+    return {"ok": True}
 
 
 @app.post("/api/title", response_model=TitleResponseBody)

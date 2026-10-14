@@ -3,7 +3,7 @@
 // Strud AI — sidebar (floating glass navigation panel)
 
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { Plus, Search, Settings, Info, MessageSquare } from "lucide-react";
+import { Plus, Search, Settings, Info, MessageSquare, Trash2 } from "lucide-react";
 
 import type { Chat } from "@/types";
 import { groupChats } from "@/lib/group-chats";
@@ -20,6 +20,7 @@ interface SidebarProps {
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
+  onOpenRecycleBin: () => void;
 }
 
 export function Sidebar({
@@ -30,6 +31,7 @@ export function Sidebar({
   onDeleteChat,
   onOpenSettings,
   onOpenAbout,
+  onOpenRecycleBin,
 }: SidebarProps) {
   const [query, setQuery] = useState("");
 
@@ -136,6 +138,7 @@ export function Sidebar({
 
       {/* Footer */}
       <div className="border-t border-[var(--color-hairline-soft)] p-2">
+        <button onClick={onOpenRecycleBin} className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] text-[var(--color-ink-secondary)] transition-colors hover:bg-white/[0.06] hover:text-[var(--color-ink)]"><Trash2 size={15} strokeWidth={1.75}/> Recently Deleted</button>
         <button
           onClick={onOpenSettings}
           className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] text-[var(--color-ink-secondary)] transition-colors hover:bg-white/[0.06] hover:text-[var(--color-ink)]"

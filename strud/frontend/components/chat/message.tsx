@@ -6,9 +6,12 @@ import { useState } from "react";
 import { motion } from "motion/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import { Check, Copy } from "lucide-react";
 
 import type { Message } from "@/types";
+import { normalizeEscapedBreakTags } from "@/lib/markdown";
 import { SourceList } from "./source-list";
 
 export function MessageRow({ message }: { message: Message }) {
@@ -71,6 +74,7 @@ interface AssistantMessageProps {
 
 function AssistantMessage({ message }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false);
+  const markdown = normalizeEscapedBreakTags(message.content);
 
   if (message.error) {
     return (
@@ -93,8 +97,18 @@ function AssistantMessage({ message }: AssistantMessageProps) {
   return (
     <div className="group flex flex-col items-start gap-1.5">
       <div className="markdown-body w-full max-w-full">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {message.content}
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw, rehypeSanitize]}
+          components={{
+            table: ({ children }) => (
+              <div className="markdown-table-wrap">
+                <table>{children}</table>
+              </div>
+            ),
+          }}
+        >
+          {markdown}
         </ReactMarkdown>
       </div>
 

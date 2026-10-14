@@ -85,6 +85,7 @@ class TutorState(TypedDict, total=False):
     user_id: str
     question: str
     image_context: str
+    attachments: list[dict]
     is_score_query: bool
     score_answer: Optional[str]
     score_topic: str
@@ -109,6 +110,7 @@ class TutorState(TypedDict, total=False):
     user_id: str
     question: str
     image_context: str
+    attachments: list[dict]
     is_score_query: bool
     score_answer: Optional[str]
     score_topic: str
@@ -653,7 +655,7 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
         answer = (state.get("answer") or "").strip()
 
         if question:
-            store.append_message(chat_id, user_id, "user", question)
+            store.append_message(chat_id, user_id, "user", question, state.get("attachments") or [])
             for fact in _extract_user_memories(question):
                 store.remember(user_id, fact, source="conversation")
         if answer:
@@ -935,8 +937,12 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
             "- Multi-part questions: address every part.",
             "- Vehicle-answering: mechanisms, causal chains, and relationships over generic summaries.",
             "- Length: match it to the question — short for simple facts, detailed for complex processes.",
-            "- Use Markdown. Headings, numbered lists, and tables when they genuinely help. "
-            "Use 1-3 emojis where they aid navigation (e.g. 🧬 🔬 📘), never one per sentence.",
+            "- Use Markdown naturally: paragraphs for ordinary answers; numbered lists for steps; "
+            "bullets for related points; and short descriptive headings only when they improve a complex explanation. "
+            "Use bold sparingly for key terms and takeaways. Use a table only for a comparison with several items "
+            "and shared attributes—never as the default format. For A/L Biology, explain mechanisms and useful examples "
+            "when they help learning. Do not use HTML for formatting; use Markdown line breaks and blank lines instead. "
+            "Avoid emojis unless one genuinely improves navigation.",
             "- No canned openings ('Great question!'), no filler endings inviting more questions.",
         ]
         facts = state.get("memory_facts") or []

@@ -5,6 +5,11 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Menu } from "lucide-react";
+import { fetchChats, fetchDeletedChats, restoreChat, permanentlyDeleteChat, emptyRecycleBin } from "@/lib/api";
+import { getUserId } from "@/lib/user-id";
+import { chatStore } from "@/lib/store/chat-store";
+import type { Chat } from "@/types";
+import { RecycleBin } from "./recycle-bin";
 
 import { useChatStore } from "@/hooks/use-chats";
 import { Sidebar } from "@/components/sidebar/sidebar";
@@ -27,6 +32,8 @@ export function ChatLayout() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [recycleOpen, setRecycleOpen] = useState(false);
+  const [deletedChats, setDeletedChats] = useState<Chat[]>([]);
 
   // Sidebar hidden by default below lg.
   useEffect(() => {
@@ -62,6 +69,20 @@ export function ChatLayout() {
 
   /** Opens the confirmation dialog; removal happens after confirm. */
   const requestDeleteChat = (id: string) => setDeleteTarget(id);
+  const openRecycleBin = () => { setRecycleOpen(true); void fetchDeletedChats(getUserId()).then(setDeletedChats).catch(() => showToast("Couldn't load Recycle Bin")); };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key !== "Backspace" || deleteTarget) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, textarea, [contenteditable='true']")) return;
+      if (!store.activeChatId) return;
+      event.preventDefault();
+      setDeleteTarget(store.activeChatId);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [deleteTarget, store.activeChatId]);
 
   return (
     <div className="flex h-dvh gap-2.5 p-2.5">
@@ -75,6 +96,7 @@ export function ChatLayout() {
           onDeleteChat={requestDeleteChat}
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenAbout={() => setAboutOpen(true)}
+          onOpenRecycleBin={openRecycleBin}
         />
       </aside>
 
@@ -112,6 +134,7 @@ export function ChatLayout() {
                   setDrawerOpen(false);
                   setAboutOpen(true);
                 }}
+                onOpenRecycleBin={() => { setDrawerOpen(false); openRecycleBin(); }}
               />
             </motion.aside>
           </>
@@ -208,15 +231,19 @@ export function ChatLayout() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+      <RecycleBin open={recycleOpen} chats={deletedChats} onClose={() => setRecycleOpen(false)} onRestore={async (id) => { await restoreChat(id, getUserId()); const refreshed = await fetchChats(getUserId()); chatStore.set(refreshed); store.selectChat(id); setDeletedChats((items) => items.filter((chat) => chat.id !== id)); showToast("Chat restored"); }} onPermanentDelete={async (id) => { await permanentlyDeleteChat(id, getUserId()); setDeletedChats((items) => items.filter((chat) => chat.id !== id)); showToast("Chat permanently deleted"); }} onEmpty={async () => { await emptyRecycleBin(getUserId()); setDeletedChats([]); showToast("Recycle Bin emptied"); }} />
       <DeleteChatDialog
         open={deleteTarget !== null}
         chatTitle={deleteTargetChat?.title ?? ""}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => {
           if (deleteTarget) {
-            store.deleteChat(deleteTarget);
-            setDrawerOpen(false);
-            showToast("Chat deleted");
+            void store.deleteChat(deleteTarget).then((moved) => {
+              if (moved) {
+                setDrawerOpen(false);
+                showToast("Moved to Recycle Bin");
+              }
+            });
           }
           setDeleteTarget(null);
         }}
