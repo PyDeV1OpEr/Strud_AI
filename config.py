@@ -97,25 +97,66 @@ VERIFICATION_MAX_REVISIONS = int(
 
 
 # ============================================================
-# LLM / LM STUDIO
+# LLM / LM STUDIO (— read from assistant_config.json "model" block)
 # ============================================================
+#
+# The model is EXTERNALIZED CONFIG, not a constant in code. Changing
+# which model Strud uses (e.g. to a GLM build you load into LM Studio)
+# means editing assistant_config.json -> "model"."id" and restarting
+# the backend; no source edits. Values below are defaults/fallbacks so
+# config.py still exports the same names the rest of the code (LLM
+# client, CLI, tests, vision) already imports.
 
-MODEL = "openai/gpt-oss-20b"
+def _load_model_config() -> dict:
+    """Loads the model block, falling back to the proven defaults."""
+    defaults = {
+        "provider": "lm_studio",
+        "base_url": "http://localhost:1234/v1",
+        "id": "openai/gpt-oss-20b",
+        "temperature": 0.2,
+        "conversational_temperature": 0.55,
+        "max_tokens": 2000,
+        "timeout": 180,
+    }
+    try:
+        block = ASSISTANT_CONFIG.get("model")
+        if isinstance(block, dict):
+            merged = dict(defaults)
+            merged.update(block)
+            # Strip internal documentation keys.
+            return {
+                key: value for key, value in merged.items()
+                if not key.startswith("_")
+            }
+    except Exception:
+        pass
+    return defaults
 
-LM_STUDIO_BASE_URL = "http://localhost:1234/v1"
+
+_MODEL_CONFIG = _load_model_config()
+
+MODEL_PROVIDER = str(_MODEL_CONFIG.get("provider", "lm_studio"))
+
+MODEL = str(_MODEL_CONFIG.get("id", "openai/gpt-oss-20b"))
+
+LM_STUDIO_BASE_URL = str(
+    _MODEL_CONFIG.get("base_url", "http://localhost:1234/v1")
+)
 
 CHAT_ENDPOINT = f"{LM_STUDIO_BASE_URL}/chat/completions"
 
-LLM_TEMPERATURE = 0.2
+LLM_TEMPERATURE = float(_MODEL_CONFIG.get("temperature", 0.2))
 
 # Slightly livelier sampling for casual/social conversational turns
 # (laughter, small talk, reactions). Grounded teaching answers keep
 # LLM_TEMPERATURE for factual stability.
-LLM_CONVERSATIONAL_TEMPERATURE = 0.55
+LLM_CONVERSATIONAL_TEMPERATURE = float(
+    _MODEL_CONFIG.get("conversational_temperature", 0.55)
+)
 
-LLM_MAX_TOKENS = 2000
+LLM_MAX_TOKENS = int(_MODEL_CONFIG.get("max_tokens", 2000))
 
-LLM_TIMEOUT = 180
+LLM_TIMEOUT = int(_MODEL_CONFIG.get("timeout", 180))
 
 
 # ============================================================

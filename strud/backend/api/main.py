@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from rich.console import Console
 
@@ -47,6 +47,9 @@ from Science.Biology.biology_retriever import (  # noqa: E402
     initialize_retriever,
 )
 from cli.interface import StrudCLI  # noqa: E402
+from strud.backend.tutoring_graph import build_tutoring_graph  # noqa: E402
+from strud.backend.memory_store import get_memory_store  # noqa: E402
+from strud.backend.llm_chain import reset_chat_model  # noqa: E402
 
 from ..models.schemas import (  # noqa: E402
     ChatRequestBody,
@@ -128,11 +131,15 @@ class CapturingRenderer:
 # Shared pipeline state
 # ------------------------------------------------------------
 
-_app_lock = threading.Lock()          # serializes LLM pipeline turns
+# The image route resolves a per-chat session while it serializes the shared
+# LM Studio turn.  That helper also protects lazy session creation, so this
+# must be re-entrant rather than self-deadlocking an image request.
+_app_lock = threading.RLock()         # serializes LLM pipeline turns
 _retriever_ready = False
-_sessions: dict[str, StrudCLI] = {}
+_sessions: dict[tuple[str, str], StrudCLI] = {}
 
 _llm: Optional[LLMClient] = None
+_graph = None                       # LangGraph tutoring workflow
 
 
 def _get_llm() -> LLMClient:
@@ -154,17 +161,28 @@ def _ensure_retriever() -> None:
             _retriever_ready = True
 
 
-def _get_session(chat_id: str) -> StrudCLI:
+def _get_graph():
+    """Compile the LangGraph tutoring workflow once per process."""
+    global _graph
+    if _graph is None:
+        with _app_lock:
+            if _graph is None:
+                _graph = build_tutoring_graph()
+    return _graph
+
+
+def _get_session(chat_id: str, user_id: str) -> StrudCLI:
     """
     One headless CLI session per chat: its own BiologyEngine history
     and ConversationMemory (like a separate CLI run), sharing the
     retriever and LLM client. This keeps per-chat conversation memory
     exactly the way the terminal app behaves.
     """
-    session = _sessions.get(chat_id)
+    session_key = (user_id, chat_id)
+    session = _sessions.get(session_key)
     if session is None:
         with _app_lock:
-            session = _sessions.get(chat_id)
+            session = _sessions.get(session_key)
             if session is None:
                 llm = _get_llm()
                 engine = BiologyEngine(llm_client=llm, model=MODEL)
@@ -172,7 +190,7 @@ def _get_session(chat_id: str) -> StrudCLI:
                     llm_client=llm, biology_engine=engine, model=MODEL
                 )
                 session.renderer = CapturingRenderer()
-                _sessions[chat_id] = session
+                _sessions[session_key] = session
     return session
 
 
@@ -254,41 +272,79 @@ def health() -> dict:
 
 @app.post("/api/chat", response_model=ChatResponseBody)
 def chat(request: ChatRequestBody) -> ChatResponseBody:
-    _ensure_retriever()
-    session = _get_session(request.chatId)
-    renderer = _session_renderer(session)
+    """
+    Chat via the LangGraph tutoring workflow — persistent memory,
+    deterministic quiz scoring, textbook retrieval, identity guard.
 
-    image_paths = _decode_attachments(request)
+    Image attachments still flow through the existing vision pipeline
+    (Qwen3-VL analysis is loaded into the session context); the
+    follow-up question is then answered by the graph.
+    """
+    _ensure_retriever()
+    graph = _get_graph()
     question = (request.message or "").strip()
+    user_id = request.userId.strip()
+    image_paths = _decode_attachments(request)
+    image_context = ""
 
     try:
         with _app_lock:  # the shared LM Studio server is single-model
             if image_paths:
-                # Real vision path: Qwen3-VL analyses the image, stores
-                # concepts, and the next question flows through the
-                # visual pipeline (image + question -> retrieval -> GPT-OSS).
-                session.handle_image_command(str(image_paths[0]))
+                # Send the exact uploaded bytes to Qwen through its vision
+                # adapter.  The former CLI command swallowed Qwen errors and
+                # analysed with an empty question, leaving this HTTP route
+                # without a dependable image result.
+                session = _get_session(request.chatId, user_id)
+                if session.vision is None:
+                    raise RuntimeError("Vision is disabled in vision_config.json.")
+                analysis = session.vision.analyze_image(image_paths[0], question=question)
+                if analysis.error:
+                    raise RuntimeError(analysis.error)
+                # The former path stored this only on the CLI session; the
+                # LangGraph turn never received it. Pass Qwen's structured
+                # interpretation into the actual response-generation prompt.
+                image_context = session.vision.format_visual_context([analysis])
                 if not question:
                     question = "Explain this Biology image."
 
-            session.process_question(question)
+            result = graph.invoke(
+                {
+                    "chat_id": request.chatId,
+                    "user_id": user_id,
+                    "question": question,
+                    "image_context": image_context,
+                },
+                # LangGraph's checkpoint key must include the user too. Chat
+                # ids are client-generated and can collide across browsers.
+                config={"configurable": {"thread_id": f"{user_id}:{request.chatId}"}},
+            )
     except RuntimeError as error:
         # LLMClient raises RuntimeError when LM Studio is unreachable.
         logger.error("chat failed: %s", error)
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:
+        # LangChain errors (e.g. 'Model unloaded.' after the model was
+        # swapped in LM Studio) must surface as 503, not a bare 500 —
+        # and drop the cached ChatOpenAI so the next turn reconnects.
+        reset_chat_model()
+        logger.error("chat failed (non-runtime): %s", error)
+        raise HTTPException(
+            status_code=503,
+            detail="The AI engine rejected the request (is the configured model loaded in LM Studio?).",
+        ) from error
     finally:
         for path in image_paths:
             path.unlink(missing_ok=True)
 
-    content = renderer.answer or renderer.message or renderer.error or ""
+    content = (result.get("answer") or "").strip() if result else ""
     if not content:
         raise HTTPException(status_code=502, detail="The pipeline produced no response.")
 
     sources: Optional[list[SourceOut]] = None
-    # Only real retrieval sources are returned — never fabricated.
-    if renderer.grounded and renderer.sources:
+    pages = result.get("retrieval_pages") or []
+    if result.get("grounded") and pages:
         sources = [
-            SourceOut(label="Biology Resource Book", pages=renderer.sources)
+            SourceOut(label="Biology Resource Book", pages=sorted(set(pages)))
         ]
 
     return ChatResponseBody(
@@ -314,3 +370,46 @@ def title(request: TitleRequestBody) -> TitleResponseBody:
         return TitleResponseBody(title=reply.strip().strip('"') or "New chat")
     except RuntimeError:
         return TitleResponseBody(title="New chat")
+
+
+# ------------------------------------------------------------
+# Memory & quiz introspection endpoints (persistent layers)
+# ------------------------------------------------------------
+
+@app.get("/api/memory")
+def list_memory(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    """All stored user-level memory facts for this user."""
+    facts = get_memory_store().recall(user_id, limit=50)
+    return {"facts": facts}
+
+
+@app.delete("/api/memory/{memory_id}")
+def delete_memory(memory_id: int, user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    deleted = get_memory_store().forget_by_id(user_id, memory_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Memory not found.")
+    return {"ok": True}
+
+
+@app.get("/api/quizzes")
+def list_quizzes(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    """All quiz sessions for this user, across every chat."""
+    sessions = get_memory_store().all_quiz_sessions(user_id)
+    return {"sessions": sessions}
+
+
+@app.get("/api/quizzes/{quiz_id}/score")
+def quiz_score(quiz_id: str, user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    """Deterministic score for one quiz session, from stored attempts."""
+    score = get_memory_store().score_quiz(user_id, quiz_id)
+    if score is None:
+        raise HTTPException(status_code=404, detail="Quiz session not found.")
+    return score
+
+
+@app.delete("/api/quizzes/{quiz_id}")
+def delete_quiz(quiz_id: str, user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    deleted = get_memory_store().delete_quiz_session(user_id, quiz_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Quiz session not found.")
+    return {"ok": True}

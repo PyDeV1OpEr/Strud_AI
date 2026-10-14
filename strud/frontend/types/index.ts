@@ -54,6 +54,8 @@ export interface AIResponse {
 /** Request body for POST /api/chat */
 export interface ChatRequest {
   chatId: string;
+  /** Stable per-browser identity used to scope server-side memory. */
+  userId: string;
   message: string;
   attachments?: {
     name: string;

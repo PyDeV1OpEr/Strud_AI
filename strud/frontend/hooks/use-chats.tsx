@@ -28,6 +28,7 @@ import {
 } from "@/lib/api";
 import { chatStore } from "@/lib/store/chat-store";
 import { deriveTitle } from "@/lib/title";
+import { getUserId } from "@/lib/user-id";
 
 interface PendingAttachment {
   file: File;
@@ -236,6 +237,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       try {
         const response = await apiSendMessage({
           chatId,
+          userId: getUserId(),
           message: trimmed,
           ...(encodedAttachments.length ? { attachments: encodedAttachments } : {}),
         });

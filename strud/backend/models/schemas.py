@@ -17,6 +17,9 @@ class AttachmentIn(BaseModel):
 
 class ChatRequestBody(BaseModel):
     chatId: str
+    # A stable, browser-generated id scopes durable histories and memories.
+    # Authentication can replace this with the authenticated subject later.
+    userId: str = Field(alias="userId", min_length=1, max_length=200)
     message: str = ""
     attachments: Optional[list[AttachmentIn]] = None
 
