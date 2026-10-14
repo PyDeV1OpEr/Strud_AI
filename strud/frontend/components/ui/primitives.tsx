@@ -59,6 +59,9 @@ export function Dialog({
       if (event.key === "Escape") onClose();
     };
     document.addEventListener("keydown", handleKey);
+    // Move keyboard focus into the dialog so screen reader and tab
+    // users land inside the surface instead of behind it.
+    panelRef.current?.focus();
     return () => document.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
@@ -78,7 +81,8 @@ export function Dialog({
       />
       <div
         ref={panelRef}
-        className="glass-strong relative z-10 w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-black/50 animate-[dialog-in_200ms_cubic-bezier(0.2,0.9,0.3,1.2)]"
+        tabIndex={-1}
+        className="glass-strong relative z-10 w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-black/50 outline-none animate-[dialog-in_200ms_cubic-bezier(0.2,0.9,0.3,1.2)] max-h-[85vh] overflow-y-auto scroll-slim"
       >
         {title && (
           <div className="mb-3 flex items-center justify-between">

@@ -15,23 +15,52 @@ export function AboutDialog({
 }) {
   return (
     <Dialog open={open} onClose={onClose} labelledBy="about-title">
-      <div className="flex flex-col items-center gap-3 text-center">
-        <div className="glass flex h-14 w-14 items-center justify-center rounded-2xl">
-          {/* Reuse the letter mark */}
-          <span className="bg-gradient-to-br from-emerald-300 to-emerald-500 bg-clip-text text-2xl font-bold text-transparent">
-            S
-          </span>
+      <div className="flex flex-col gap-5">
+        {/* Branding */}
+        <div className="flex flex-col items-center gap-3 text-center">
+          <div className="glass flex h-14 w-14 items-center justify-center rounded-2xl">
+            <span className="bg-gradient-to-br from-emerald-300 to-emerald-500 bg-clip-text text-2xl font-bold text-transparent">
+              S
+            </span>
+          </div>
+          <div>
+            <h2 id="about-title" className="text-lg font-semibold text-[var(--color-ink)]">
+              STRUD AI
+            </h2>
+            <p className="text-xs text-emerald-400 mt-0.5 font-mono">v0.2.0</p>
+          </div>
+          <p className="text-[13px] leading-relaxed text-[var(--color-ink-secondary)] max-w-[280px]">
+            Your A/L Biology learning assistant — intelligent explanations grounded in your curriculum resources.
+          </p>
         </div>
-        <h2 id="about-title" className="text-lg font-semibold">
-          Strud AI
-        </h2>
-        <p className="text-[14px] leading-relaxed text-[var(--color-ink-secondary)]">
-          Your Biology learning assistant.
-          <br />
-          Built to help you understand Biology through intelligent
-          explanations grounded in your learning resources.
+
+        {/* Tech Stack */}
+        <div className="rounded-xl border border-[var(--color-hairline-soft)] bg-white/[0.03] p-4 flex flex-col gap-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">
+            Built With
+          </p>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {(
+              [
+                ["Frontend", "Next.js 15 + React 19"],
+                ["Styling", "Tailwind CSS v4"],
+                ["Backend", "FastAPI + Python"],
+                ["AI Engine", "LM Studio (Local LLM)"],
+                ["Vision", "Qwen3 VL 8B"],
+                ["Database", "SQLite (Persistent)"],
+              ] as [string, string][]
+            ).map(([label, value]) => (
+              <div key={label} className="flex flex-col gap-0.5">
+                <span className="text-[10px] text-[var(--color-ink-muted)]">{label}</span>
+                <span className="font-medium text-[var(--color-ink)]">{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <p className="text-center text-[11px] text-[var(--color-ink-muted)]">
+          Running fully locally — your data never leaves your device.
         </p>
-        <p className="text-xs text-[var(--color-ink-muted)]">Version 0.1.0</p>
       </div>
     </Dialog>
   );

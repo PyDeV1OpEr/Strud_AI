@@ -26,7 +26,29 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){
+              try {
+                var p = JSON.parse(localStorage.getItem('strud_appearance_prefs_v1') || '{}');
+                var t = p.theme || 'dark';
+                if (t === 'system') {
+                  t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                }
+                var r = document.documentElement;
+                r.setAttribute('data-theme', t);
+                r.setAttribute('data-accent', p.accent || 'emerald');
+                r.setAttribute('data-font-size', p.fontSize || 'md');
+                r.setAttribute('data-density', p.density || 'comfortable');
+                if (t === 'light') { r.classList.remove('dark'); } else { r.classList.add('dark'); }
+                if (p.reducedMotion) { r.classList.add('reduce-motion'); }
+              } catch(e) {}
+            })();`,
+          }}
+        />
+      </head>
       <body className={`${inter.variable} font-sans`}>
         {/* atmospheric gradient layer */}
         <div className="atmosphere" aria-hidden="true" />

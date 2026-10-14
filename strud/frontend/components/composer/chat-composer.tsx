@@ -4,15 +4,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { ArrowUp, Paperclip, X } from "lucide-react";
+import { ArrowUp, Loader2, Paperclip, X } from "lucide-react";
 
 import type { Attachment } from "@/types";
+import { getStoredChatPrefs } from "@/lib/preferences";
 
 interface ChatComposerProps {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
-  disabled: boolean;
+  /** While true the send button is disabled; typing stays available. */
+  isGenerating: boolean;
   attachments: Attachment[];
   onRemoveAttachment: (id: string) => void;
   onSelectAttachment: (file: File) => void;
@@ -25,7 +27,7 @@ export function ChatComposer({
   value,
   onChange,
   onSend,
-  disabled,
+  isGenerating,
   attachments,
   onRemoveAttachment,
   onSelectAttachment,
@@ -42,12 +44,26 @@ export function ChatComposer({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }, [value]);
 
-  const canSend = (value.trim().length > 0 || attachments.length > 0) && !disabled;
+  // Typing and queueing attachments remain available while a previous
+  // message generates; only sending is disabled (the backend does not
+  // support cancelling an in-flight generation).
+  const hasContent = value.trim().length > 0 || attachments.length > 0;
+  const canSend = hasContent && !isGenerating;
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      if (canSend) onSend();
+    const prefs = getStoredChatPrefs();
+    const mod = event.metaKey || event.ctrlKey;
+
+    if (prefs.enterToSend) {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        if (canSend) onSend();
+      }
+    } else {
+      if (event.key === "Enter" && mod) {
+        event.preventDefault();
+        if (canSend) onSend();
+      }
     }
   };
 
@@ -151,7 +167,12 @@ export function ChatComposer({
         <motion.button
           onClick={onSend}
           disabled={!canSend}
-          aria-label="Send message"
+          aria-label={isGenerating ? "Strud is still answering" : "Send message"}
+          title={
+            isGenerating
+              ? "Strud is still answering — you can keep typing meanwhile"
+              : undefined
+          }
           whileTap={canSend ? { scale: 0.82 } : undefined}
           whileHover={canSend ? { scale: 1.06 } : undefined}
           transition={{ type: "spring", stiffness: 500, damping: 26 }}
@@ -161,7 +182,11 @@ export function ChatComposer({
               : "bg-white/[0.06] text-[var(--color-ink-muted)]"
           }`}
         >
-          <ArrowUp size={17} strokeWidth={2.2} />
+          {isGenerating ? (
+            <Loader2 size={17} strokeWidth={2.2} className="animate-spin" />
+          ) : (
+            <ArrowUp size={17} strokeWidth={2.2} />
+          )}
         </motion.button>
       </div>
 

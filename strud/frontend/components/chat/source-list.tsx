@@ -7,9 +7,10 @@ import { AnimatePresence, motion } from "motion/react";
 import { BookOpen, ChevronDown } from "lucide-react";
 
 import type { Source } from "@/types";
+import { getStoredChatPrefs } from "@/lib/preferences";
 
 export function SourceList({ sources }: { sources: Source[] }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => getStoredChatPrefs().showSourcesDefault);
 
   return (
     <div className="mt-1 w-full">

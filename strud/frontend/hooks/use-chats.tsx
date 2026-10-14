@@ -43,6 +43,9 @@ interface ChatStoreValue {
   chats: Chat[];
   activeChat: Chat | null;
   activeChatId: string | null;
+  /** Active project context; null means the ordinary "all chats" scope. */
+  activeProjectId: string | null;
+  setActiveProject: (id: string | null) => void;
   isGenerating: boolean;
   error: string | null;
   pendingAttachments: PendingAttachment[];
@@ -72,6 +75,7 @@ function upsertMessage(
   chatId: string,
   message: Message,
   title?: string,
+  projectId?: string | null,
 ): Chat[] {
   const exists = chats.some((chat) => chat.id === chatId);
   return exists
@@ -91,6 +95,7 @@ function upsertMessage(
           title: title ?? "New chat",
           createdAt: nowIso(),
           updatedAt: nowIso(),
+          ...(projectId ? { projectId } : {}),
           messages: [message],
         },
         ...chats,
@@ -132,6 +137,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const [pendingAttachments, setPendingAttachments] = useState<
     PendingAttachment[]
   >([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
 
   const activeChatId =
@@ -182,9 +188,9 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   // ---- sending ----
 
   const appendMessage = useCallback(
-    (chatId: string, message: Message, title?: string) => {
+    (chatId: string, message: Message, title?: string, projectId?: string | null) => {
       chatStore.set(
-        upsertMessage(chatStore.getSnapshot(), chatId, message, title),
+        upsertMessage(chatStore.getSnapshot(), chatId, message, title, projectId),
       );
     },
     [],
@@ -204,12 +210,14 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       const currentChats = chatStore.getSnapshot();
       let chatId = activeChatId;
       let isFirstMessage = false;
+      let chatProject: string | null = null;
       let title: string | undefined;
 
       if (!chatId || !currentChats.some((chat) => chat.id === chatId)) {
         chatId = makeChat().id;
         isFirstMessage = true;
         title = trimmed ? deriveTitle(trimmed) : "Image question";
+        chatProject = activeProjectId;
       } else {
         const current = currentChats.find((chat) => chat.id === chatId);
         isFirstMessage = (current?.messages.length ?? 0) === 0;
@@ -236,7 +244,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
         ...(attachments.length ? { attachments } : {}),
       };
 
-      appendMessage(chatId, userMessage, title);
+      appendMessage(chatId, userMessage, title, chatProject);
       setActiveChatId(chatId);
       setPendingAttachments([]);
 
@@ -264,6 +272,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           userId: getUserId(),
           message: trimmed,
           ...(title ? { title } : {}),
+          ...(chatProject ? { projectId: chatProject } : {}),
           ...(encodedAttachments.length ? { attachments: encodedAttachments } : {}),
         });
 
@@ -319,6 +328,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     },
     [
       activeChatId,
+      activeProjectId,
       isGenerating,
       pendingAttachments,
       appendMessage,
@@ -335,6 +345,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       chats,
       activeChat,
       activeChatId,
+      activeProjectId,
+      setActiveProject: setActiveProjectId,
       isGenerating,
       error,
       pendingAttachments,
@@ -352,6 +364,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       chats,
       activeChat,
       activeChatId,
+      activeProjectId,
       isGenerating,
       error,
       pendingAttachments,

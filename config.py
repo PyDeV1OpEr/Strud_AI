@@ -159,6 +159,44 @@ LLM_MAX_TOKENS = int(_MODEL_CONFIG.get("max_tokens", 2000))
 LLM_TIMEOUT = int(_MODEL_CONFIG.get("timeout", 180))
 
 
+def update_model_config(
+    model_id: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    base_url: Optional[str] = None,
+) -> dict:
+    """Safely updates assistant_config.json model block and refreshes runtime globals."""
+    global ASSISTANT_CONFIG, _MODEL_CONFIG, MODEL, LM_STUDIO_BASE_URL, CHAT_ENDPOINT, LLM_TEMPERATURE, LLM_MAX_TOKENS
+    try:
+        with open(ASSISTANT_CONFIG_FILE, "r", encoding="utf-8") as f:
+            full_cfg = json.load(f)
+    except Exception:
+        full_cfg = dict(ASSISTANT_CONFIG)
+
+    model_block = full_cfg.get("model", {})
+    if model_id is not None and model_id.strip():
+        model_block["id"] = model_id.strip()
+    if temperature is not None:
+        model_block["temperature"] = max(0.0, min(2.0, float(temperature)))
+    if max_tokens is not None:
+        model_block["max_tokens"] = max(1, min(8192, int(max_tokens)))
+    if base_url is not None and base_url.strip():
+        model_block["base_url"] = base_url.strip()
+
+    full_cfg["model"] = model_block
+    with open(ASSISTANT_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(full_cfg, f, indent=2)
+
+    ASSISTANT_CONFIG = _load_assistant_config()
+    _MODEL_CONFIG = _load_model_config()
+    MODEL = str(_MODEL_CONFIG.get("id", "openai/gpt-oss-20b"))
+    LM_STUDIO_BASE_URL = str(_MODEL_CONFIG.get("base_url", "http://localhost:1234/v1"))
+    CHAT_ENDPOINT = f"{LM_STUDIO_BASE_URL}/chat/completions"
+    LLM_TEMPERATURE = float(_MODEL_CONFIG.get("temperature", 0.2))
+    LLM_MAX_TOKENS = int(_MODEL_CONFIG.get("max_tokens", 2000))
+    return dict(_MODEL_CONFIG)
+
+
 # ============================================================
 # VISION (QWEN3-VL) — externalized config
 # ============================================================

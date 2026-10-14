@@ -5,44 +5,37 @@
     "domain": "G.C.E. Advanced Level Biology",
     "tagline": "Your personal study assistant for G.C.E. A/L Biology"
   },
-
   "model": {
     "provider": "lm_studio",
     "base_url": "http://localhost:1234/v1",
     "id": "openai/gpt-oss-20b",
     "temperature": 0.2,
     "conversational_temperature": 0.55,
-    "max_tokens": 2000,
+    "max_tokens": 4096,
     "timeout": 180,
-    "_switching_to_glm_5_3": "Load GLM in LM Studio, then set this block's 'id' to the model id LM Studio reports (/v1/models). No code change required — every component reads this config."
+    "_switching_to_glm_5_3": "Load GLM in LM Studio, then set this block's 'id' to the model id LM Studio reports (/v1/models). No code change required \u2014 every component reads this config."
   },
-
   "vision": {
     "enabled": true,
     "model": "qwen/qwen3-vl-8b",
     "base_url": "http://localhost:1234/v1"
   },
-
   "retrieval": {
     "tfidf": true,
     "semantic": true,
     "reranking": true,
     "grounding": true,
-
     "mode": "tfidf_dense",
-
     "rrf_weights": {
       "tfidf": 1.0,
       "bm25": 1.0,
       "semantic": 1.0
     }
   },
-
   "verification": {
     "enabled": true,
     "max_revision_attempts": 1
   },
-
   "identity": {
     "expose_internal_models": false,
     "expose_system_prompts": false,

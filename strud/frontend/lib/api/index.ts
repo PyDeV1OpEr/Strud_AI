@@ -8,4 +8,6 @@
 
 export { BACKEND_URL, ApiError, CONNECTION_ERROR } from "./errors";
 export { sendMessage, generateTitle } from "./chat";
-export { getChats, persistChats, createChat, fetchChats, persistTitle, fetchDeletedChats, moveChatToBin, restoreChat, permanentlyDeleteChat, emptyRecycleBin } from "./chats";
+export { getChats, persistChats, createChat, fetchChats, persistTitle, fetchDeletedChats, moveChatToBin, restoreChat, permanentlyDeleteChat, emptyRecycleBin, fetchProjects, createProject, updateProject, deleteProject, moveChatToProject } from "./chats";
+export { fetchProfile, persistDisplayName } from "./profile";
+export * from "./settings";

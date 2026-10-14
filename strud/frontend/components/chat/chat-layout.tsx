@@ -2,13 +2,27 @@
 
 // Main application shell — sidebar + chat area + composer + dialogs.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Menu } from "lucide-react";
-import { fetchChats, fetchDeletedChats, restoreChat, permanentlyDeleteChat, emptyRecycleBin } from "@/lib/api";
+import {
+  fetchChats,
+  fetchDeletedChats,
+  restoreChat,
+  permanentlyDeleteChat,
+  emptyRecycleBin,
+  fetchProjects,
+  createProject,
+  updateProject,
+  deleteProject,
+  moveChatToProject,
+  fetchProfile,
+  persistDisplayName,
+  persistTitle,
+} from "@/lib/api";
 import { getUserId } from "@/lib/user-id";
 import { chatStore } from "@/lib/store/chat-store";
-import type { Chat } from "@/types";
+import type { Chat, Project } from "@/types";
 import { RecycleBin } from "./recycle-bin";
 
 import { useChatStore } from "@/hooks/use-chats";
@@ -17,23 +31,87 @@ import { ChatMessages } from "./chat-messages";
 import { EmptyState } from "./empty-state";
 import { ChatComposer } from "@/components/composer/chat-composer";
 import { ProfileMenu } from "@/components/profile/profile-menu";
+import { ProfileDialog } from "@/components/profile/profile-dialog";
 import {
   AboutDialog,
-  SettingsDialog,
   DeleteChatDialog,
 } from "@/components/profile/dialogs";
+import {
+  ProjectDialog,
+  DeleteProjectDialog,
+  RenameChatDialog,
+} from "@/components/sidebar/project-dialogs";
 import { StrudLogo } from "@/components/profile/strud-logo";
 import { Toast } from "@/components/ui/primitives";
+import { SettingsControlCenter } from "@/components/settings/settings-control-center";
+import { applyAppearanceToDOM, getStoredAppearance } from "@/lib/preferences";
+
 
 export function ChatLayout() {
   const store = useChatStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<
+    "profile" | "analytics" | "models" | "knowledge" | "memory" | "privacy" | "appearance" | "chat" | "diagnostics" | "shortcuts"
+  >("profile");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [recycleOpen, setRecycleOpen] = useState(false);
   const [deletedChats, setDeletedChats] = useState<Chat[]>([]);
+
+  /* ---- projects + profile state ---- */
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectDialog, setProjectDialog] = useState<
+    { mode: "create" } | { mode: "edit"; project: Project } | null
+  >(null);
+  const [deleteProjectTarget, setDeleteProjectTarget] = useState<Project | null>(null);
+  const [renameTarget, setRenameTarget] = useState<Chat | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profile, setProfile] = useState({ displayName: "Student" });
+  const [profileSaving, setProfileSaving] = useState(false);
+
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 2200);
+  }, []);
+
+  // Server sync: chats, projects, and the local profile. Offline usage
+  // falls back to the cached state without any project features.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchProjects(getUserId())
+      .then((loaded) => {
+        if (!cancelled) setProjects(loaded);
+      })
+      .catch(() => {
+        if (!cancelled)
+          showToast("Projects need the backend running — showing cached state");
+      });
+    void fetchProfile(getUserId())
+      .then((loaded) => {
+        if (!cancelled) setProfile(loaded);
+      })
+      .catch(() => {
+        /* anonymous "Student" default is fine offline */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showToast]);
+
+  const refreshProjectsAndChats = useCallback(async () => {
+    const [loadedProjects, loadedChats] = await Promise.all([
+      fetchProjects(getUserId()),
+      fetchChats(getUserId()),
+    ]);
+    setProjects(loadedProjects);
+    if (loadedChats.length > 0) chatStore.set(loadedChats);
+  }, []);
+
+  const refreshProjects = useCallback(async () => {
+    setProjects(await fetchProjects(getUserId()));
+  }, []);
 
   // Sidebar hidden by default below lg.
   useEffect(() => {
@@ -50,19 +128,31 @@ export function ChatLayout() {
     (chat) => chat.id === deleteTarget,
   );
 
-  const showToast = (message: string) => {
-    setToast(message);
-    setTimeout(() => setToast(null), 2200);
-  };
-
   const handleSelectChat = (id: string) => {
     store.selectChat(id);
     setDrawerOpen(false);
   };
 
-  const handleNewChat = () => {
+  const handleNewChat = useCallback(() => {
     store.newChat();
     setDrawerOpen(false);
+  }, [store]);
+
+  const handleSelectProject = async (id: string | null) => {
+    store.setActiveProject(id);
+    // Leaving project scope also leaves a project chat selection so the
+    // auto-selection picks the newest ordinary chat.
+    if (!id) store.newChat();
+    else if (id) {
+      // Jump to the newest chat inside the project, if any.
+      const projectChats = chatStore
+        .getSnapshot()
+        .filter((chat) => chat.projectId === id);
+      store.selectChat(projectChats[0]?.id ?? "");
+      if (!projectChats[0]) store.newChat();
+    }
+    setDrawerOpen(false);
+    void refreshProjects().catch(() => undefined);
   };
 
   const isEmpty = !store.activeChat || store.activeChat.messages.length === 0;
@@ -71,33 +161,173 @@ export function ChatLayout() {
   const requestDeleteChat = (id: string) => setDeleteTarget(id);
   const openRecycleBin = () => { setRecycleOpen(true); void fetchDeletedChats(getUserId()).then(setDeletedChats).catch(() => showToast("Couldn't load Recycle Bin")); };
 
+  // Project flows ---------------------------------------------------
+
+  const submitProjectDialog = async (name: string, description: string) => {
+    const editing =
+      projectDialog?.mode === "edit" ? projectDialog.project : null;
+    setProjectDialog(null);
+    try {
+      if (editing) {
+        await updateProject(getUserId(), editing.id, name, description);
+        showToast("Project updated");
+      } else {
+        await createProject(getUserId(), name, description);
+        showToast("Project created");
+      }
+      await refreshProjectsAndChats();
+    } catch {
+      showToast("Couldn't save the project — is the backend running?");
+    }
+  };
+
+  const confirmDeleteProject = async () => {
+    const project = deleteProjectTarget;
+    setDeleteProjectTarget(null);
+    if (!project) return;
+    try {
+      await deleteProject(getUserId(), project.id);
+      if (store.activeProjectId === project.id) store.setActiveProject(null);
+      await refreshProjectsAndChats();
+      showToast("Project deleted — its chats are now ordinary chats");
+    } catch {
+      showToast("Couldn't delete that project");
+    }
+  };
+
+  const moveChat = async (chat: Chat, projectId: string | null) => {
+    try {
+      await moveChatToProject(chat.id, getUserId(), projectId);
+      chatStore.set(
+        chatStore
+          .getSnapshot()
+          .map((item) =>
+            item.id === chat.id
+              ? { ...item, projectId: projectId ?? undefined }
+              : item,
+          ),
+      );
+      await refreshProjects();
+      if (store.activeProjectId && store.activeProjectId !== projectId) {
+        store.newChat(); // chat left the current project view
+      }
+      showToast(projectId ? "Chat moved to project" : "Chat removed from project");
+    } catch {
+      showToast("Couldn't move that chat — is the backend running?");
+    }
+  };
+
+  const submitRenameChat = async (title: string) => {
+    const chat = renameTarget;
+    setRenameTarget(null);
+    if (!chat || !title) return;
+    chatStore.set(
+      chatStore
+        .getSnapshot()
+        .map((item) => (item.id === chat.id ? { ...item, title } : item)),
+    );
+    try {
+      await persistTitle(chat.id, getUserId(), title);
+    } catch {
+      showToast("Renamed locally — couldn't reach the backend to save");
+      return;
+    }
+    showToast("Chat renamed");
+  };
+
+  // Profile flow ----------------------------------------------------
+
+  const submitProfile = async (displayName: string) => {
+    setProfileSaving(true);
+    try {
+      const saved = await persistDisplayName(getUserId(), displayName);
+      setProfile(saved);
+      setProfileOpen(false);
+      showToast("Profile updated");
+    } catch {
+      showToast("Couldn't save your name — is the backend running?");
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  // Apply stored appearance preferences on mount (SSR-safe).
+  useEffect(() => {
+    applyAppearanceToDOM(getStoredAppearance());
+  }, []);
+
+  // Global keyboard shortcuts.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key !== "Backspace" || deleteTarget) return;
+      const mod = event.metaKey || event.ctrlKey;
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, [contenteditable='true']")) return;
-      if (!store.activeChatId) return;
-      event.preventDefault();
-      setDeleteTarget(store.activeChatId);
+      const inInput = target?.matches("input, textarea, [contenteditable='true']");
+
+      // Cmd/Ctrl+K → Open Settings Control Center
+      if (mod && event.key === "k" && !inInput) {
+        event.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
+
+      // Cmd/Ctrl+Shift+O → New Chat
+      if (mod && event.shiftKey && event.key === "O") {
+        event.preventDefault();
+        handleNewChat();
+        return;
+      }
+
+      // Cmd/Ctrl+B → Toggle sidebar drawer (mobile) / no-op on desktop
+      if (mod && event.key === "b" && !inInput) {
+        event.preventDefault();
+        setDrawerOpen((prev) => !prev);
+        return;
+      }
+
+      // Cmd/Ctrl+/ → Jump to Keyboard Shortcuts tab inside Settings
+      if (mod && event.key === "/" && !inInput) {
+        event.preventDefault();
+        setSettingsOpen(true);
+        setSettingsInitialTab("shortcuts");
+        return;
+      }
+
+      // Cmd/Ctrl+Backspace → Delete active chat
+      if (mod && event.key === "Backspace" && !deleteTarget && !inInput) {
+        if (!store.activeChatId) return;
+        event.preventDefault();
+        setDeleteTarget(store.activeChatId);
+        return;
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [deleteTarget, store.activeChatId]);
+  }, [deleteTarget, store.activeChatId, handleNewChat]);
+
+  const sidebarProps = {
+    chats: store.chats,
+    activeChatId: store.activeChatId,
+    projects,
+    activeProjectId: store.activeProjectId,
+    onCreateProject: () => setProjectDialog({ mode: "create" }),
+    onSelectProject: (id: string | null) => void handleSelectProject(id),
+    onEditProject: (project: Project) => setProjectDialog({ mode: "edit", project }),
+    onDeleteProject: (project: Project) => setDeleteProjectTarget(project),
+    onMoveChatToProject: (chat: Chat, projectId: string | null) => void moveChat(chat, projectId),
+    onNewChat: handleNewChat,
+    onSelectChat: handleSelectChat,
+    onRenameChat: (chat: Chat) => setRenameTarget(chat),
+    onDeleteChat: requestDeleteChat,
+    onOpenSettings: () => setSettingsOpen(true),
+    onOpenAbout: () => setAboutOpen(true),
+    onOpenRecycleBin: openRecycleBin,
+  };
 
   return (
     <div className="flex h-dvh gap-2.5 p-2.5">
       {/* ---- Sidebar: inline on desktop ------------------------------- */}
       <aside className="hidden w-72 shrink-0 lg:block">
-        <Sidebar
-          chats={store.chats}
-          activeChatId={store.activeChatId}
-          onNewChat={handleNewChat}
-          onSelectChat={store.selectChat}
-          onDeleteChat={requestDeleteChat}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onOpenAbout={() => setAboutOpen(true)}
-          onOpenRecycleBin={openRecycleBin}
-        />
+        <Sidebar {...sidebarProps} />
       </aside>
 
       {/* ---- Sidebar: drawer on mobile/tablet -------------------------- */}
@@ -120,22 +350,7 @@ export function ChatLayout() {
               transition={{ type: "spring", stiffness: 420, damping: 38 }}
               className="fixed inset-y-2.5 left-2.5 z-50 w-[290px] lg:hidden"
             >
-              <Sidebar
-                chats={store.chats}
-                activeChatId={store.activeChatId}
-                onNewChat={handleNewChat}
-                onSelectChat={handleSelectChat}
-                onDeleteChat={requestDeleteChat}
-                onOpenSettings={() => {
-                  setDrawerOpen(false);
-                  setSettingsOpen(true);
-                }}
-                onOpenAbout={() => {
-                  setDrawerOpen(false);
-                  setAboutOpen(true);
-                }}
-                onOpenRecycleBin={() => { setDrawerOpen(false); openRecycleBin(); }}
-              />
+              <Sidebar {...sidebarProps} />
             </motion.aside>
           </>
         )}
@@ -156,9 +371,15 @@ export function ChatLayout() {
             {/* Compact brand for desktop while chatting */}
             <div className="hidden items-center gap-2 lg:flex">
               <StrudLogo size={22} />
+              {store.activeProjectId && (
+                <span className="text-[13px] text-[var(--color-ink-muted)]">
+                  {projects.find((p) => p.id === store.activeProjectId)?.name}
+                </span>
+              )}
             </div>
           </div>
           <ProfileMenu
+            onOpenProfile={() => setProfileOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenAbout={() => setAboutOpen(true)}
           />
@@ -180,7 +401,7 @@ export function ChatLayout() {
               value={store.composerValue}
               onChange={store.setComposerValue}
               onSend={() => void store.send(store.composerValue)}
-              disabled={store.isGenerating}
+              isGenerating={store.isGenerating}
               attachments={store.pendingAttachments.map((a) => ({
                 id: a.previewUrl,
                 url: a.previewUrl,
@@ -205,7 +426,7 @@ export function ChatLayout() {
               value={store.composerValue}
               onChange={store.setComposerValue}
               onSend={() => void store.send(store.composerValue)}
-              disabled={store.isGenerating}
+              isGenerating={store.isGenerating}
               attachments={store.pendingAttachments.map((a) => ({
                 id: a.previewUrl,
                 url: a.previewUrl,
@@ -227,11 +448,55 @@ export function ChatLayout() {
 
       {/* ---- Dialogs ------------------------------------------------------ */}
       <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
-      <SettingsDialog
+      <SettingsControlCenter
+        key={settingsOpen ? `settings-${settingsInitialTab}` : "settings-closed"}
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        initialTab={settingsInitialTab}
+        onClose={() => {
+          setSettingsOpen(false);
+          setSettingsInitialTab("profile");
+        }}
+        onChatsCleared={() => {
+          void fetchChats(getUserId()).then((chats) => {
+            chatStore.set(chats);
+            store.newChat();
+          }).catch(() => undefined);
+        }}
       />
-      <RecycleBin open={recycleOpen} chats={deletedChats} onClose={() => setRecycleOpen(false)} onRestore={async (id) => { await restoreChat(id, getUserId()); const refreshed = await fetchChats(getUserId()); chatStore.set(refreshed); store.selectChat(id); setDeletedChats((items) => items.filter((chat) => chat.id !== id)); showToast("Chat restored"); }} onPermanentDelete={async (id) => { await permanentlyDeleteChat(id, getUserId()); setDeletedChats((items) => items.filter((chat) => chat.id !== id)); showToast("Chat permanently deleted"); }} onEmpty={async () => { await emptyRecycleBin(getUserId()); setDeletedChats([]); showToast("Recycle Bin emptied"); }} />
+      <ProfileDialog
+        key={profileOpen ? `profile-open-${profile.displayName}` : "profile-closed"}
+        open={profileOpen}
+        userId={getUserId()}
+        displayName={profile.displayName}
+        saving={profileSaving}
+        onClose={() => setProfileOpen(false)}
+        onSave={(displayName) => void submitProfile(displayName)}
+      />
+      <ProjectDialog
+        key={
+          projectDialog
+            ? `project-${projectDialog.mode}-${projectDialog.mode === "edit" ? projectDialog.project.id : "new"}`
+            : "project-closed"
+        }
+        open={projectDialog !== null}
+        project={projectDialog?.mode === "edit" ? projectDialog.project : null}
+        onClose={() => setProjectDialog(null)}
+        onSubmit={(name, description) => void submitProjectDialog(name, description)}
+      />
+      <DeleteProjectDialog
+        open={deleteProjectTarget !== null}
+        project={deleteProjectTarget}
+        onCancel={() => setDeleteProjectTarget(null)}
+        onConfirm={() => void confirmDeleteProject()}
+      />
+      <RenameChatDialog
+        key={renameTarget ? `rename-${renameTarget.id}` : "rename-closed"}
+        open={renameTarget !== null}
+        chat={renameTarget}
+        onClose={() => setRenameTarget(null)}
+        onSubmit={(title) => void submitRenameChat(title)}
+      />
+      <RecycleBin open={recycleOpen} chats={deletedChats} onClose={() => setRecycleOpen(false)} onRestore={async (id) => { await restoreChat(id, getUserId()); const refreshed = await fetchChats(getUserId()); chatStore.set(refreshed); store.selectChat(id); setDeletedChats((items) => items.filter((chat) => chat.id !== id)); showToast("Chat restored"); }} onPermanentDelete={async (id) => { await permanentlyDeleteChat(id, getUserId()); setDeletedChats((items) => items.filter((chat) => chat.id !== id)); showToast("Chat permanently deleted"); }} onEmpty={async () => { await emptyRecycleBin(getUserId()); setDeletedChats([]); showToast("Recycle Bin emptied"); void refreshProjects().catch(() => undefined); }} />
       <DeleteChatDialog
         open={deleteTarget !== null}
         chatTitle={deleteTargetChat?.title ?? ""}
@@ -242,6 +507,7 @@ export function ChatLayout() {
               if (moved) {
                 setDrawerOpen(false);
                 showToast("Moved to Recycle Bin");
+                void refreshProjects().catch(() => undefined);
               }
             });
           }

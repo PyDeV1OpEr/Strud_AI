@@ -40,11 +40,20 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from llm_client import LLMClient, check_lm_studio  # noqa: E402
-from config import CACHE_DIR, MODEL  # noqa: E402
+from config import (  # noqa: E402
+    CACHE_DIR,
+    MODEL,
+    LM_STUDIO_BASE_URL,
+    LLM_TEMPERATURE,
+    LLM_MAX_TOKENS,
+    PDF_FILE,
+    update_model_config,
+)
 from Science.Biology.biology_engine import BiologyEngine  # noqa: E402
 from Science.Biology.biology_retriever import (  # noqa: E402
     get_retriever_status,
     initialize_retriever,
+    retrieve_biology,
 )
 from cli.interface import StrudCLI  # noqa: E402
 from strud.backend.tutoring_graph import build_tutoring_graph  # noqa: E402
@@ -52,9 +61,20 @@ from strud.backend.memory_store import get_memory_store  # noqa: E402
 from strud.backend.llm_chain import reset_chat_model  # noqa: E402
 
 from ..models.schemas import (  # noqa: E402
+    ChatProjectUpdateBody,
     ChatRequestBody,
     ChatResponseBody,
     ChatTitleUpdateBody,
+    ClearHistoryBody,
+    MemoryCreateBody,
+    MemorySettingsBody,
+    ModelActiveUpdateBody,
+    ModelTestBody,
+    ProfileFullRequestBody,
+    ProfileRequestBody,
+    ProjectCreateBody,
+    ProjectUpdateBody,
+    RagQueryTestBody,
     SourceOut,
     TitleRequestBody,
     TitleResponseBody,
@@ -297,7 +317,7 @@ def chat(request: ChatRequestBody) -> ChatResponseBody:
     store = get_memory_store()
     if store.is_chat_deleted(request.chatId, user_id):
         raise HTTPException(status_code=409, detail="This chat is in the Recycle Bin. Restore it before sending a message.")
-    store.ensure_chat(request.chatId, user_id, request.title)
+    store.ensure_chat(request.chatId, user_id, request.title, request.projectId)
     image_context = ""
 
     try:
@@ -422,6 +442,75 @@ def update_chat_title(chat_id: str, request: ChatTitleUpdateBody) -> dict:
     return {"ok": True}
 
 
+@app.patch("/api/chats/{chat_id}/project")
+def update_chat_project(chat_id: str, request: ChatProjectUpdateBody) -> dict:
+    """Move a chat into a project, or out of one (projectId omitted/null)."""
+    store = get_memory_store()
+    if store.is_chat_deleted(chat_id, request.userId):
+        raise HTTPException(status_code=409, detail="Restore this chat from the Recycle Bin first.")
+    if request.projectId and not store.project_exists(request.userId, request.projectId):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    if not store.set_chat_project(chat_id, request.userId, request.projectId):
+        raise HTTPException(status_code=404, detail="Active chat not found.")
+    return {"ok": True}
+
+
+# ------------------------------------------------------------
+# Projects (sidebar organization) ------------------------------------------
+# ------------------------------------------------------------
+
+@app.get("/api/projects")
+def list_projects(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    return {"projects": get_memory_store().list_projects(user_id)}
+
+
+@app.post("/api/projects")
+def create_project(request: ProjectCreateBody) -> dict:
+    project = get_memory_store().create_project(request.userId, request.name, request.description)
+    if project is None:
+        raise HTTPException(status_code=422, detail="A project name is required.")
+    return {"project": project}
+
+
+@app.patch("/api/projects/{project_id}")
+def update_project(project_id: str, request: ProjectUpdateBody) -> dict:
+    if not get_memory_store().update_project(request.userId, project_id, request.name, request.description):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{project_id}")
+def delete_project(project_id: str, user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    """Delete a project but keep its chats as ordinary chats (no data loss)."""
+    unassigned = get_memory_store().delete_project(user_id, project_id)
+    if unassigned < 0:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return {"ok": True, "chatsUnassigned": unassigned}
+
+
+# ------------------------------------------------------------
+# Profile (local, per-browser identity) -------------------------------------
+# ------------------------------------------------------------
+
+@app.get("/api/profile")
+def get_profile(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    return get_memory_store().get_profile(user_id)
+
+
+@app.put("/api/profile")
+def update_profile(request: ProfileFullRequestBody) -> dict:
+    return get_memory_store().set_profile(
+        user_id=request.userId,
+        display_name=request.displayName,
+        avatar=request.avatar,
+        response_style=request.responseStyle,
+        explanation_detail=request.explanationDetail,
+        study_focus=request.studyFocus,
+        memory_enabled=request.memoryEnabled,
+        custom_instructions=request.customInstructions,
+    )
+
+
 @app.post("/api/title", response_model=TitleResponseBody)
 def title(request: TitleRequestBody) -> TitleResponseBody:
     try:
@@ -481,3 +570,405 @@ def delete_quiz(quiz_id: str, user_id: str = Query(..., min_length=1, max_length
     if not deleted:
         raise HTTPException(status_code=404, detail="Quiz session not found.")
     return {"ok": True}
+
+
+# ------------------------------------------------------------
+# AI Control Center — Analytics & Token Usage
+# ------------------------------------------------------------
+
+@app.get("/api/analytics/summary")
+def get_analytics_summary(
+    user_id: str = Query(..., min_length=1, max_length=200),
+    range: str = Query("last_30_days"),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+) -> dict:
+    return get_memory_store().get_usage_summary(
+        user_id=user_id,
+        range_key=range,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@app.get("/api/analytics/calendar")
+def get_analytics_calendar(
+    user_id: str = Query(..., min_length=1, max_length=200),
+    year: Optional[int] = Query(None),
+) -> dict:
+    return get_memory_store().get_usage_calendar(user_id=user_id, year=year)
+
+
+@app.get("/api/analytics/timeseries")
+def get_analytics_timeseries(
+    user_id: str = Query(..., min_length=1, max_length=200),
+    range: str = Query("last_30_days"),
+) -> dict:
+    return {"timeseries": get_memory_store().get_usage_timeseries(user_id=user_id, range_key=range)}
+
+
+@app.get("/api/analytics/models")
+def get_analytics_models(
+    user_id: str = Query(..., min_length=1, max_length=200),
+    range: str = Query("last_30_days"),
+) -> dict:
+    return {"models": get_memory_store().get_usage_by_model(user_id=user_id, range_key=range)}
+
+
+@app.get("/api/analytics/requests")
+def get_analytics_requests(
+    user_id: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(25, ge=1, le=100),
+) -> dict:
+    return {"requests": get_memory_store().get_recent_requests(user_id=user_id, limit=limit)}
+
+
+@app.post("/api/analytics/export")
+def export_analytics(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    records = get_memory_store().export_usage_records(user_id)
+    return {"records": records}
+
+
+# ------------------------------------------------------------
+# AI Control Center — AI Models Management
+# ------------------------------------------------------------
+
+@app.get("/api/models")
+def get_models_info() -> dict:
+    import requests
+    available = []
+    connected = False
+    try:
+        r = requests.get(f"{LM_STUDIO_BASE_URL}/models", timeout=3)
+        if r.ok:
+            data = r.json()
+            available = [m.get("id") for m in data.get("data", []) if m.get("id")]
+            connected = True
+    except Exception:
+        pass
+
+    return {
+        "activeModel": {
+            "id": MODEL,
+            "name": MODEL.split("/")[-1].replace("-", " ").title(),
+            "provider": "LM Studio (Local)",
+            "baseUrl": LM_STUDIO_BASE_URL,
+            "temperature": LLM_TEMPERATURE,
+            "maxTokens": LLM_MAX_TOKENS,
+            "contextWindow": 8192,
+            "status": "online" if (connected and MODEL in available) else ("model_not_loaded" if connected else "offline"),
+            "capabilities": {"text": True, "vision": False},
+        },
+        "visionModel": {
+            "id": "qwen/qwen3-vl-8b",
+            "name": "Qwen3 VL 8B",
+            "provider": "LM Studio (Local)",
+            "baseUrl": LM_STUDIO_BASE_URL,
+            "status": "online" if (connected and "qwen/qwen3-vl-8b" in available) else ("model_not_loaded" if connected else "offline"),
+            "capabilities": {"text": True, "vision": True},
+        },
+        "availableModels": available if available else [MODEL, "qwen/qwen3-vl-8b"],
+        "serverConnected": connected,
+    }
+
+
+@app.post("/api/models/test")
+def test_model_connection(request: ModelTestBody) -> dict:
+    import requests
+    import time
+    target_url = (request.baseUrl or LM_STUDIO_BASE_URL).rstrip("/")
+    target_model = request.modelId or MODEL
+
+    start = time.perf_counter()
+    try:
+        resp = requests.get(f"{target_url}/models", timeout=4)
+        latency = int((time.perf_counter() - start) * 1000)
+        if not resp.ok:
+            return {
+                "ok": False,
+                "status": "http_error",
+                "latencyMs": latency,
+                "message": f"Server responded with HTTP {resp.status_code}: {resp.text[:200]}",
+            }
+        data = resp.json()
+        models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+        if target_model in models:
+            return {
+                "ok": True,
+                "status": "healthy",
+                "latencyMs": latency,
+                "modelId": target_model,
+                "message": f"Connected to LM Studio! Model '{target_model}' is active and ready.",
+            }
+        else:
+            return {
+                "ok": False,
+                "status": "model_not_loaded",
+                "latencyMs": latency,
+                "availableModels": models,
+                "message": f"LM Studio is reachable, but '{target_model}' is not currently loaded. Loaded: {models or 'None'}.",
+            }
+    except requests.ConnectionError:
+        return {
+            "ok": False,
+            "status": "connection_refused",
+            "latencyMs": None,
+            "message": f"Could not connect to LM Studio at {target_url}. Please ensure LM Studio is running on port 1234.",
+        }
+    except requests.Timeout:
+        return {
+            "ok": False,
+            "status": "timeout",
+            "latencyMs": None,
+            "message": f"Connection to LM Studio at {target_url} timed out (>4s). The server may be busy or generating.",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "status": "error",
+            "latencyMs": None,
+            "message": f"Connection check failed: {str(e)}",
+        }
+
+
+@app.post("/api/models/active")
+def update_active_model(request: ModelActiveUpdateBody) -> dict:
+    updated = update_model_config(
+        model_id=request.modelId,
+        temperature=request.temperature,
+        max_tokens=request.maxTokens,
+        base_url=request.baseUrl,
+    )
+    reset_chat_model()
+    global _llm
+    _llm = None
+    return {"ok": True, "config": updated}
+
+
+# ------------------------------------------------------------
+# AI Control Center — Knowledge Base & RAG Inspector
+# ------------------------------------------------------------
+
+@app.get("/api/rag/status")
+def get_rag_status() -> dict:
+    return get_retriever_status()
+
+
+@app.get("/api/rag/documents")
+def list_rag_documents() -> dict:
+    import pymupdf
+    books_dir = _REPO_ROOT / "Science" / "Biology" / "books"
+    docs = []
+    if books_dir.exists():
+        status = get_retriever_status()
+        for f in sorted(books_dir.glob("*.pdf")):
+            try:
+                page_cnt = len(pymupdf.open(f))
+            except Exception:
+                page_cnt = None
+            is_primary = (f.name == PDF_FILE.name)
+            docs.append({
+                "name": f.name,
+                "sizeBytes": f.stat().st_size,
+                "pageCount": page_cnt,
+                "isPrimary": is_primary,
+                "chunkCount": status.get("chunk_count") if is_primary else None,
+                "status": "indexed" if (is_primary and status.get("textbook_loaded")) else "ready",
+            })
+    return {"documents": docs}
+
+
+@app.post("/api/rag/test-query")
+def test_rag_query(request: RagQueryTestBody) -> dict:
+    import time
+    start = time.perf_counter()
+    res = retrieve_biology(request.query)
+    duration_ms = int((time.perf_counter() - start) * 1000)
+
+    chunks_out = []
+    for r in (res.results or []):
+        chunks_out.append({
+            "index": r.index,
+            "page": r.page,
+            "text": r.text[:320] + ("..." if len(r.text) > 320 else ""),
+            "tfidfScore": round(float(r.tfidf_score), 4),
+            "bm25Score": round(float(r.bm25_score), 4),
+            "semanticScore": round(float(r.semantic_score), 4),
+            "rrfScore": round(float(r.rrf_score), 4),
+            "confidence": round(float(r.confidence), 4),
+        })
+
+    return {
+        "query": request.query,
+        "grounded": res.grounded,
+        "confidence": round(float(res.confidence), 4),
+        "bestPage": res.best_page,
+        "reason": res.reason,
+        "latencyMs": duration_ms,
+        "resultsCount": len(chunks_out),
+        "chunks": chunks_out,
+    }
+
+
+@app.post("/api/rag/reindex")
+def reindex_primary_textbook() -> dict:
+    _ensure_retriever()
+    status = get_retriever_status()
+    return {"ok": True, "chunkCount": status.get("chunk_count"), "pageCount": status.get("page_count")}
+
+
+# ------------------------------------------------------------
+# AI Control Center — Memory Management
+# ------------------------------------------------------------
+
+@app.post("/api/memory")
+def add_memory(request: MemoryCreateBody) -> dict:
+    fact_id = get_memory_store().remember(request.userId, request.content, source=request.source or "explicit")
+    return {"ok": True, "id": fact_id}
+
+
+@app.delete("/api/memory/all")
+def clear_all_memory(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    cleared = get_memory_store().delete_all_memories(user_id)
+    return {"ok": True, "clearedCount": cleared}
+
+
+@app.patch("/api/memory/settings")
+def update_memory_settings(request: MemorySettingsBody) -> dict:
+    profile = get_memory_store().set_profile(request.userId, "", memory_enabled=request.memoryEnabled)
+    return {"ok": True, "memoryEnabled": profile.get("memory_enabled", True)}
+
+
+# ------------------------------------------------------------
+# AI Control Center — Privacy & Storage Management
+# ------------------------------------------------------------
+
+@app.get("/api/privacy/storage-info")
+def get_privacy_storage_info(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    return get_memory_store().get_storage_stats(user_id, UPLOADS_DIR, CACHE_DIR)
+
+
+@app.post("/api/privacy/clean-uploads")
+def clean_orphaned_uploads() -> dict:
+    return get_memory_store().clean_orphaned_uploads(UPLOADS_DIR)
+
+
+@app.post("/api/privacy/export-data")
+def export_user_data(user_id: str = Query(..., min_length=1, max_length=200)) -> dict:
+    return get_memory_store().export_full_data(user_id)
+
+
+@app.post("/api/privacy/clear-history")
+def clear_user_history(request: ClearHistoryBody) -> dict:
+    count = get_memory_store().clear_all_chats(request.userId, move_to_bin=not request.permanent)
+    return {"ok": True, "clearedCount": count, "permanent": request.permanent}
+
+
+# ------------------------------------------------------------
+# AI Control Center — System Diagnostics
+# ------------------------------------------------------------
+
+@app.get("/api/diagnostics")
+def get_diagnostics() -> dict:
+    import time
+    import requests
+    from datetime import datetime, timezone, timedelta
+
+    db_start = time.perf_counter()
+    db_ok = False
+    db_latency = None
+    try:
+        with get_memory_store()._conn() as conn:
+            conn.execute("SELECT 1").fetchone()
+            db_latency = int((time.perf_counter() - db_start) * 1000)
+            db_ok = True
+    except Exception:
+        pass
+
+    lm_start = time.perf_counter()
+    lm_ok = False
+    model_loaded = False
+    lm_latency = None
+    try:
+        r = requests.get(f"{LM_STUDIO_BASE_URL}/models", timeout=2.5)
+        lm_latency = int((time.perf_counter() - lm_start) * 1000)
+        if r.ok:
+            lm_ok = True
+            models = [m.get("id") for m in r.json().get("data", []) if m.get("id")]
+            if MODEL in models:
+                model_loaded = True
+    except Exception:
+        pass
+
+    rag_status = get_retriever_status()
+    rag_ok = bool(rag_status.get("textbook_loaded"))
+
+    recent_failures = 0
+    with get_memory_store()._conn() as conn:
+        try:
+            one_day_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            row = conn.execute("SELECT COUNT(*) FROM ai_usage WHERE request_status = 'failed' AND created_at >= ?", (one_day_ago,)).fetchone()
+            recent_failures = row[0] if row else 0
+        except Exception:
+            pass
+
+    git_hash = "0.2.0"
+    git_head = _REPO_ROOT / ".git" / "HEAD"
+    if git_head.exists():
+        try:
+            ref = git_head.read_text().strip()
+            if ref.startswith("ref: "):
+                ref_path = _REPO_ROOT / ".git" / ref[5:]
+                if ref_path.exists():
+                    git_hash = ref_path.read_text().strip()[:7]
+            else:
+                git_hash = ref[:7]
+        except Exception:
+            pass
+
+    overall_status = "healthy" if (db_ok and lm_ok and model_loaded and rag_ok) else ("degraded" if (db_ok and rag_ok) else "unavailable")
+
+    return {
+        "status": overall_status,
+        "appVersion": "0.2.0",
+        "gitCommit": git_hash,
+        "checks": [
+            {
+                "name": "FastAPI Backend Server",
+                "status": "healthy",
+                "details": "API endpoint responding",
+                "latencyMs": 0,
+            },
+            {
+                "name": "SQLite Database",
+                "status": "healthy" if db_ok else "unavailable",
+                "details": f"strud_memory_v3.db ({db_latency}ms)" if db_ok else "Database connection failed",
+                "latencyMs": db_latency,
+            },
+            {
+                "name": "LM Studio Server",
+                "status": "healthy" if lm_ok else "unavailable",
+                "details": f"{LM_STUDIO_BASE_URL} ({lm_latency}ms)" if lm_ok else f"Unreachable at {LM_STUDIO_BASE_URL}",
+                "latencyMs": lm_latency,
+            },
+            {
+                "name": f"Configured Model ({MODEL})",
+                "status": "healthy" if model_loaded else ("unavailable" if lm_ok else "unknown"),
+                "details": "Model loaded in LM Studio" if model_loaded else ("Model NOT loaded" if lm_ok else "Server unreachable"),
+                "latencyMs": lm_latency if model_loaded else None,
+            },
+            {
+                "name": "Biology Textbook Index (RAG)",
+                "status": "healthy" if rag_ok else "degraded",
+                "details": f"{rag_status.get('chunk_count', 0)} chunks, {rag_status.get('page_count', 0)} pages ({rag_status.get('retrieval_mode', 'standard')})",
+                "latencyMs": None,
+            },
+            {
+                "name": "Visual Engine (Qwen3-VL)",
+                "status": "healthy" if check_lm_studio() else "unknown",
+                "details": "Image perception active",
+                "latencyMs": None,
+            },
+        ],
+        "recentFailures24h": recent_failures,
+    }

@@ -390,6 +390,7 @@ Design decision: **facts live in the retriever, behaviour lives in the fine-tune
 
 ```bash
 # offline regression suites (no textbook index or LM Studio needed):
+.venv/bin/python -m unittest tests/test_ai_control_center.py   # AI Control Center, analytics, calendar, diagnostics
 .venv/bin/python tests/test_memory_and_quiz.py            # tutoring graph structure + quiz logic
 .venv/bin/python -m pytest strud/backend/test_chat_persistence.py      # titles, attachments, Recycle Bin
 .venv/bin/python -m pytest strud/backend/test_response_formatting.py   # answer-formatting contract
@@ -403,7 +404,7 @@ python tests/benchmark_grounding.py          # grounding thresholds
 python tests/benchmark_retrieval.py          # retrieval quality
 ```
 
-Frontend: `cd strud/frontend && npm run lint && npm run build && npm run test:markdown`.
+Frontend: `cd strud/frontend && npx tsc --noEmit && npx eslint components/settings/ components/chat/chat-layout.tsx lib/api/settings.ts lib/preferences.ts`.
 
 The backend regression suites use `pytest`, which is already included in `strud/backend/requirements.txt`.
 

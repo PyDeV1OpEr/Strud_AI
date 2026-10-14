@@ -7,11 +7,12 @@ import { AnimatePresence, motion } from "motion/react";
 import { CircleUserRound, Info, Settings, User } from "lucide-react";
 
 interface ProfileMenuProps {
+  onOpenProfile: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
 }
 
-export function ProfileMenu({ onOpenSettings, onOpenAbout }: ProfileMenuProps) {
+export function ProfileMenu({ onOpenProfile, onOpenSettings, onOpenAbout }: ProfileMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -34,7 +35,7 @@ export function ProfileMenu({ onOpenSettings, onOpenAbout }: ProfileMenuProps) {
   }, [open]);
 
   const items = [
-    { icon: User, label: "User", action: () => {} },
+    { icon: User, label: "Profile", action: onOpenProfile },
     { icon: Settings, label: "Settings", action: onOpenSettings },
     { icon: Info, label: "About Strud", action: onOpenAbout },
   ];

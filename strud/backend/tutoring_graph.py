@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from contextlib import contextmanager
 from typing import Any, Optional, TypedDict
 
@@ -28,12 +29,23 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import StateGraph, START, END
 
-from config import CACHE_DIR
+from config import CACHE_DIR, MODEL
 from .llm_chain import get_chat_model, get_textbook_retriever
 from .memory_store import get_memory_store, MemoryStore
 
 CHECKPOINT_DB_PATH = CACHE_DIR / "strud_checkpoints.db"
 MAX_CONTEXT_DOCS = 6
+
+
+def _count_tokens(text: str) -> int:
+    if not text:
+        return 0
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return max(1, len(text) // 4)
 
 
 def _extract_user_memories(message: str) -> list[str]:
@@ -105,30 +117,9 @@ class TutorState(TypedDict, total=False):
     score_quiz_id: Optional[str]
     score_chat_id: Optional[str]
     pending_attempt: Optional[dict]
-    """Typed state schema passed between nodes."""
-    chat_id: str
-    user_id: str
-    question: str
-    image_context: str
-    attachments: list[dict]
-    is_score_query: bool
-    score_answer: Optional[str]
-    score_topic: str
-    memory_facts: list[dict]
-    needs_retrieval: bool
-    retrieval_docs: list[dict]
-    retrieval_pages: list[int]
-    grounded: bool
-    answer: Optional[str]
-    route: str
-    history: list[dict]
-    active_quiz: Optional[dict]
-    errors: list[str]
-    remembered_content: Optional[str]
-    forget_target: Optional[str]
-    new_quiz_id: Optional[str]
-    score_quiz_id: Optional[str]
-    score_chat_id: Optional[str]
+    profile: Optional[dict]
+    memory_enabled: bool
+    usage_recorded: bool
 
 
 # ============================================================
@@ -158,7 +149,9 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
         user_id = state["user_id"]
 
         history = store.get_history(chat_id, user_id, limit=12)
-        facts = store.recall(user_id, limit=10)
+        profile = store.get_profile(user_id)
+        memory_enabled = bool(profile.get("memory_enabled", True))
+        facts = store.recall(user_id, limit=10) if memory_enabled else []
 
         # Active quiz in THIS chat? If the user asked for a quiz in an
         # earlier chat, that's separate — only resume the one in this chat.
@@ -179,10 +172,13 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
             "new_quiz_id": None,
             "remembered_content": None,
             "forget_target": None,
+            "usage_recorded": False,
             # loaded context
             "history": history,
             "memory_facts": facts,
             "active_quiz": active_quiz,
+            "profile": profile,
+            "memory_enabled": memory_enabled,
         }
 
     def route(state: TutorState) -> TutorState:
@@ -604,16 +600,60 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
         user_content = _compose_user_content(state)
         messages.append(HumanMessage(content=user_content))
 
+        start_time = time.perf_counter()
+        turn_model_id = str(getattr(model, "model_name", None) or getattr(model, "model", None) or MODEL)
+
         try:
             response = model.invoke(messages)
+            duration_ms = int((time.perf_counter() - start_time) * 1000)
             text = getattr(response, "content", None) or ""
             if isinstance(text, list):
                 text = "".join(str(part) for part in text)
             state["answer"] = str(text).strip()
-        except RuntimeError as error:
+
+            # Provider token usage extraction
+            usage_meta = getattr(response, "usage_metadata", None) or {}
+            resp_meta = getattr(response, "response_metadata", None) or {}
+            token_usage = resp_meta.get("token_usage") or {}
+
+            in_tokens = usage_meta.get("input_tokens") or token_usage.get("prompt_tokens")
+            out_tokens = usage_meta.get("output_tokens") or token_usage.get("completion_tokens")
+
+            if in_tokens is not None and out_tokens is not None and (in_tokens > 0 or out_tokens > 0):
+                method = "provider"
+            else:
+                in_tokens = sum(_count_tokens(m.content if isinstance(m.content, str) else str(m.content)) for m in messages)
+                out_tokens = _count_tokens(state["answer"])
+                method = "tiktoken_cl100k"
+
+            store.record_usage(
+                user_id=state["user_id"],
+                chat_id=state.get("chat_id"),
+                model_id=turn_model_id,
+                input_tokens=int(in_tokens),
+                output_tokens=int(out_tokens),
+                token_counting_method=method,
+                request_status="success",
+                duration_ms=duration_ms,
+            )
+            state["usage_recorded"] = True
+        except Exception as error:
+            duration_ms = int((time.perf_counter() - start_time) * 1000)
+            in_tokens = sum(_count_tokens(m.content if isinstance(m.content, str) else str(m.content)) for m in messages)
+            store.record_usage(
+                user_id=state["user_id"],
+                chat_id=state.get("chat_id"),
+                model_id=turn_model_id,
+                input_tokens=int(in_tokens),
+                output_tokens=0,
+                token_counting_method="tiktoken_cl100k",
+                request_status="failed",
+                duration_ms=duration_ms,
+            )
             state["errors"] = (state.get("errors") or []) + [
                 f"model error: {error}"
             ]
+            raise
         return state
 
     def validate_node(state: TutorState) -> TutorState:
@@ -656,8 +696,9 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
 
         if question:
             store.append_message(chat_id, user_id, "user", question, state.get("attachments") or [])
-            for fact in _extract_user_memories(question):
-                store.remember(user_id, fact, source="conversation")
+            if state.get("memory_enabled", True):
+                for fact in _extract_user_memories(question):
+                    store.remember(user_id, fact, source="conversation")
         if answer:
             store.append_message(chat_id, user_id, "assistant", answer)
         return state
@@ -952,6 +993,31 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
                 "the current question):\n"
                 + "\n".join(f"- {f['content']}" for f in facts[:5])
             )
+        profile = state.get("profile") or {}
+        style = profile.get("response_style")
+        detail = profile.get("explanation_detail")
+        focus = profile.get("study_focus")
+        custom_inst = (profile.get("custom_instructions") or "").strip()
+        pref_notes = []
+        if style == "concise":
+            pref_notes.append("The student prefers concise, direct explanations.")
+        elif style == "detailed":
+            pref_notes.append("The student prefers detailed, comprehensive explanations.")
+        elif style == "socratic":
+            pref_notes.append("The student prefers a guided, Socratic teaching style with probing questions.")
+        if detail == "deep":
+            pref_notes.append("Include deep scientific mechanisms, molecular details, and biochemical pathways.")
+        elif detail == "quick":
+            pref_notes.append("Keep explanations to quick bullet points and high-level summaries.")
+        if focus == "exam":
+            pref_notes.append("Focus on Sri Lankan G.C.E. A/L exam keywords, structured points, and mark-scheme rigor.")
+        elif focus == "revision":
+            pref_notes.append("Focus on revision summaries, key definitions, and flashcard-style takeaways.")
+        if custom_inst:
+            pref_notes.append(f"Student custom instructions: {custom_inst}")
+        if pref_notes:
+            parts.append("Student personal preferences:\n" + "\n".join(f"- {note}" for note in pref_notes))
+
         pending_attempt = state.get("pending_attempt") or {}
         if state.get("route") == "new_quiz":
             parts.append(
