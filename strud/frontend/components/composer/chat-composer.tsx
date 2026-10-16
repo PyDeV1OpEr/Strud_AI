@@ -8,6 +8,7 @@ import { ArrowUp, Loader2, Paperclip, X } from "lucide-react";
 
 import type { Attachment } from "@/types";
 import { getStoredChatPrefs } from "@/lib/preferences";
+import { ThinkingSelector } from "./thinking-selector";
 
 interface ChatComposerProps {
   value: string;
@@ -123,7 +124,7 @@ export function ChatComposer({
       )}
 
       {/* Input shell */}
-      <div className="glass-strong flex items-end gap-1.5 rounded-[26px] p-2 pl-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.35)] transition-colors focus-within:border-emerald-400/30">
+      <div className="glass-strong composer-shell flex items-end gap-1.5 rounded-[26px] p-2 pl-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.35)]">
         <input
           ref={fileInputRef}
           type="file"
@@ -135,6 +136,10 @@ export function ChatComposer({
             event.target.value = "";
           }}
         />
+        <div className="mb-1.5 flex items-center gap-2">
+          <ThinkingSelector />
+        </div>
+
         <button
           onClick={() => fileInputRef.current?.click()}
           aria-label="Attach an image"

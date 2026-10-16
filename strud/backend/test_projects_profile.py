@@ -80,7 +80,11 @@ def test_first_message_assigns_project_and_later_messages_keep_it(tmp_path):
 
 def test_profile_persists_across_store_reopens(tmp_path):
     store = _store(tmp_path)
-    assert store.get_profile("student") == {"display_name": "Student"}
+    # A fresh profile carries the default identity plus the AI Control
+    # Center preference fields (response style, detail, focus, memory).
+    fresh = store.get_profile("student")
+    assert fresh["display_name"] == "Student"
+    assert fresh.get("response_style") == "balanced"
     store.set_profile("student", "Mina")
     reopened = MemoryStore(tmp_path / "memory.db")
     assert reopened.get_profile("student")["display_name"] == "Mina"
@@ -133,7 +137,9 @@ def test_profile_api_routes(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "get_memory_store", lambda: store)
     client = TestClient(main.app)
 
-    assert client.get("/api/profile", params={"user_id": "student"}).json() == {"display_name": "Student"}
+    fresh = client.get("/api/profile", params={"user_id": "student"}).json()
+    assert fresh["display_name"] == "Student"
+    assert fresh.get("response_style") == "balanced"
     saved = client.put("/api/profile", json={"userId": "student", "displayName": "Mina"})
     assert saved.status_code == 200 and saved.json()["display_name"] == "Mina"
     assert client.get("/api/profile", params={"user_id": "student"}).json()["display_name"] == "Mina"

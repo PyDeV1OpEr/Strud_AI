@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import StateGraph, START, END
 
-from config import CACHE_DIR, MODEL
+from config import CACHE_DIR, MODEL, LLM_MAX_TOKENS, LLM_MAX_OUTPUT_LIMIT, VALID_THINKING_LEVELS
 from .llm_chain import get_chat_model, get_textbook_retriever
 from .memory_store import get_memory_store, MemoryStore
 
@@ -111,6 +111,8 @@ class TutorState(TypedDict, total=False):
     history: list[dict]
     active_quiz: Optional[dict]
     errors: list[str]
+    thinking_level: Optional[str]
+    max_tokens_override: Optional[int]
     remembered_content: Optional[str]
     forget_target: Optional[str]
     new_quiz_id: Optional[str]
@@ -173,6 +175,10 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
             "remembered_content": None,
             "forget_target": None,
             "usage_recorded": False,
+            # Per-message generation controls (reset each turn; the
+            # checkpointer otherwise carries stale values forward).
+            "thinking_level": state.get("thinking_level"),
+            "max_tokens_override": state.get("max_tokens_override"),
             # loaded context
             "history": history,
             "memory_facts": facts,
@@ -600,11 +606,27 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
         user_content = _compose_user_content(state)
         messages.append(HumanMessage(content=user_content))
 
+        # Per-request generation overrides passed in from the HTTP layer.
+        # MAX_TOKENS: a per-message output budget; higher than the global
+        # default is allowed up to the configured ceiling. THINKING: the
+        # gpt-oss trained effort levels are set with the model's own
+        # system instruction ("Reasoning: low|medium|high") — LM Studio's
+        # Chat Completions endpoint does not expose a reasoning_effort
+        # JSON parameter, and no unsupported parameter is sent.
+        invoke_model = model
+        effective_max_tokens = state.get("max_tokens_override")
+        if (
+            isinstance(effective_max_tokens, int)
+            and 1 <= effective_max_tokens <= LLM_MAX_OUTPUT_LIMIT
+            and effective_max_tokens != LLM_MAX_TOKENS
+        ):
+            invoke_model = model.bind(max_tokens=effective_max_tokens)
+
         start_time = time.perf_counter()
         turn_model_id = str(getattr(model, "model_name", None) or getattr(model, "model", None) or MODEL)
 
         try:
-            response = model.invoke(messages)
+            response = invoke_model.invoke(messages)
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             text = getattr(response, "content", None) or ""
             if isinstance(text, list):
@@ -1042,7 +1064,15 @@ def build_tutoring_graph(store: Optional[MemoryStore] = None):
         errors = state.get("errors") or []
         if errors:
             parts.append(f"NOTES: {'; '.join(errors)}")
-        return "\n\n".join(parts)
+        prompt = "\n\n".join(parts)
+
+        # gpt-oss models configure their reasoning effort through a fixed
+        # system prompt keyword (OpenAI gpt-oss model card). Placing it as
+        # the first line keeps it dominant without touching the question.
+        thinking_level = (state.get("thinking_level") or "").strip().lower()
+        if thinking_level in VALID_THINKING_LEVELS:
+            prompt = f"Reasoning: {thinking_level}\n\n{prompt}"
+        return prompt
 
     def _compose_user_content(state: TutorState) -> str:
         question = state.get("question") or ""

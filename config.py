@@ -73,6 +73,13 @@ def _load_assistant_config() -> dict:
         if isinstance(raw.get("vision"), dict):
             merged["vision"].update(raw["vision"])
 
+        # The externally-managed "model" block MUST be merged too. Without
+        # this, changes saved from the API/Settings (model id, base URL,
+        # temperature, max_tokens) were written to disk but silently
+        # ignored by every runtime read of the config.
+        if isinstance(raw.get("model"), dict):
+            merged["model"] = {**merged.get("model", {}), **raw["model"]}
+
         return merged
     except Exception:
         return defaults
@@ -158,6 +165,19 @@ LLM_MAX_TOKENS = int(_MODEL_CONFIG.get("max_tokens", 2000))
 
 LLM_TIMEOUT = int(_MODEL_CONFIG.get("timeout", 180))
 
+# Upper bound a user may configure for per-message output budgets.
+# This is a safety ceiling, NOT what most requests use (LLM_MAX_TOKENS is
+# the default budget). Raise/lower it in assistant_config.json ->
+# model.max_output_tokens_limit to match what the served model accepts.
+LLM_MAX_OUTPUT_LIMIT = max(
+    LLM_MAX_TOKENS,
+    int(_MODEL_CONFIG.get("max_output_tokens_limit", 32768)),
+)
+
+# Prompt-level reasoning-effort control for gpt-oss models.
+# Accepted values mirror the OpenAI gpt-oss model card ("Reasoning: low|medium|high").
+VALID_THINKING_LEVELS = ("low", "medium", "high")
+
 
 def update_model_config(
     model_id: Optional[str] = None,
@@ -166,7 +186,7 @@ def update_model_config(
     base_url: Optional[str] = None,
 ) -> dict:
     """Safely updates assistant_config.json model block and refreshes runtime globals."""
-    global ASSISTANT_CONFIG, _MODEL_CONFIG, MODEL, LM_STUDIO_BASE_URL, CHAT_ENDPOINT, LLM_TEMPERATURE, LLM_MAX_TOKENS
+    global ASSISTANT_CONFIG, _MODEL_CONFIG, MODEL, LM_STUDIO_BASE_URL, CHAT_ENDPOINT, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_MAX_OUTPUT_LIMIT
     try:
         with open(ASSISTANT_CONFIG_FILE, "r", encoding="utf-8") as f:
             full_cfg = json.load(f)
@@ -179,7 +199,7 @@ def update_model_config(
     if temperature is not None:
         model_block["temperature"] = max(0.0, min(2.0, float(temperature)))
     if max_tokens is not None:
-        model_block["max_tokens"] = max(1, min(8192, int(max_tokens)))
+        model_block["max_tokens"] = max(1, min(32768, int(max_tokens)))
     if base_url is not None and base_url.strip():
         model_block["base_url"] = base_url.strip()
 
@@ -194,6 +214,10 @@ def update_model_config(
     CHAT_ENDPOINT = f"{LM_STUDIO_BASE_URL}/chat/completions"
     LLM_TEMPERATURE = float(_MODEL_CONFIG.get("temperature", 0.2))
     LLM_MAX_TOKENS = int(_MODEL_CONFIG.get("max_tokens", 2000))
+    LLM_MAX_OUTPUT_LIMIT = max(
+        LLM_MAX_TOKENS,
+        int(_MODEL_CONFIG.get("max_output_tokens_limit", 32768)),
+    )
     return dict(_MODEL_CONFIG)
 
 

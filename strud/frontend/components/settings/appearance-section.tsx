@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Moon, Sun, Monitor, Sparkles, Sliders } from "lucide-react";
+import { Check, Moon, Sparkles, Sliders } from "lucide-react";
 import {
   getStoredAppearance,
   saveAppearance,

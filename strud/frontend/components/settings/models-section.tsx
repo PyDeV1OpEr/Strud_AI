@@ -5,7 +5,6 @@ import {
   Cpu,
   CheckCircle2,
   AlertTriangle,
-  ChevronDown,
   RefreshCw,
   Zap,
   Sliders,
@@ -32,8 +31,10 @@ export function ModelsSection({ showToast }: ModelsSectionProps) {
   const [isCustom, setIsCustom] = useState(false);
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(2048);
+  // Largest budget the backend configuration permits; the slider bound is
+  // resolved from /api/models (maxOutputTokens), never hardcoded small.
+  const [maxTokenCeiling, setMaxTokenCeiling] = useState(32768);
   const [baseUrl, setBaseUrl] = useState("http://localhost:1234/v1");
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Connection test state
   const [testing, setTesting] = useState(false);
@@ -57,6 +58,7 @@ export function ModelsSection({ showToast }: ModelsSectionProps) {
     }
     setTemperature(res.activeModel.temperature ?? 0.2);
     setMaxTokens(res.activeModel.maxTokens ?? 2048);
+    setMaxTokenCeiling(Math.max(res.activeModel.maxOutputTokens ?? res.activeModel.maxTokens ?? 32768, (res.activeModel.maxTokens ?? 2048)));
     setBaseUrl(res.activeModel.baseUrl || "http://localhost:1234/v1");
   };
 
@@ -135,6 +137,11 @@ export function ModelsSection({ showToast }: ModelsSectionProps) {
     showToast("Values reset to defaults (click Save to apply)");
   };
 
+  // Money-like presets for the token budget, capped by the ceiling.
+  const tokenPresets = [1024, 2048, 4096, 8192, 16384].filter(
+    (value) => value <= maxTokenCeiling,
+  );
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-[var(--color-ink-muted)]">
@@ -194,6 +201,9 @@ export function ModelsSection({ showToast }: ModelsSectionProps) {
               </div>
               <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">
                 Target endpoint: <code className="text-emerald-300/80">{baseUrl}</code>
+                {data?.activeModel?.reasoningEffortSupport && (
+                  <span className="ml-2">· reasoning effort supported</span>
+                )}
               </p>
             </div>
           </div>
@@ -363,13 +373,13 @@ export function ModelsSection({ showToast }: ModelsSectionProps) {
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <div>
-                <span className="text-xs font-medium text-[var(--color-ink)]">Max Tokens</span>
+                <span className="text-xs font-medium text-[var(--color-ink)]">Default Max Output Tokens</span>
                 <span className="ml-2 font-mono text-xs text-cyan-400 font-semibold">
-                  {maxTokens} tokens
+                  {maxTokens.toLocaleString()} tokens
                 </span>
               </div>
               <div className="flex gap-1.5">
-                {[1024, 2048, 4096].map((preset) => (
+                {tokenPresets.map((preset) => (
                   <button
                     key={preset}
                     type="button"
@@ -388,12 +398,26 @@ export function ModelsSection({ showToast }: ModelsSectionProps) {
             <input
               type="range"
               min="256"
-              max="8192"
-              step="128"
+              max={String(maxTokenCeiling)}
+              step="256"
               value={maxTokens}
               onChange={(e) => setMaxTokens(parseInt(e.target.value, 10))}
               className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-white/10 accent-cyan-400"
             />
+            <div className="flex justify-between text-[10px] text-[var(--color-ink-muted)] px-0.5">
+              <span>256</span>
+              <span>Standard default: 2,048</span>
+              <span>{maxTokenCeiling.toLocaleString()}</span>
+            </div>
+            {typeof data?.activeModel?.contextWindow === "number" && data.activeModel.contextWindow > 0 ? (
+              <p className="text-[10px] text-[var(--color-ink-muted)]">
+                Model context window: <span className="text-[var(--color-ink-secondary)]">{data.activeModel.contextWindow.toLocaleString()} tokens</span> — output + prompt (system, history, textbook context, question) must fit inside it.
+              </p>
+            ) : (
+              <p className="text-[10px] text-[var(--color-ink-muted)]">
+                Model context window: <span className="text-amber-300/80">unknown</span> (set your context length in LM Studio; very large output budgets need a matching context window).
+              </p>
+            )}
           </div>
 
           {/* Endpoint Base URL */}

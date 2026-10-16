@@ -11,7 +11,7 @@
     "id": "openai/gpt-oss-20b",
     "temperature": 0.2,
     "conversational_temperature": 0.55,
-    "max_tokens": 4096,
+    "max_tokens": 32768,
     "timeout": 180,
     "_switching_to_glm_5_3": "Load GLM in LM Studio, then set this block's 'id' to the model id LM Studio reports (/v1/models). No code change required \u2014 every component reads this config."
   },

@@ -9,14 +9,14 @@
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 
   --color-void: #090a0d;
-  --color-glass: rgb(16 18 22 / 0.86);
-  --color-glass-strong: rgb(22 25 31 / 0.94);
+  --color-glass: rgb(18 20 25 / 0.92);
+  --color-glass-strong: rgb(23 26 32 / 0.96);
   --color-hairline: rgb(255 255 255 / 0.09);
   --color-hairline-soft: rgb(255 255 255 / 0.05);
 
   --color-ink: #f4f5f7;
-  --color-ink-secondary: #c0c4cc;
-  --color-ink-muted: #828794;
+  --color-ink-secondary: #c3c8d0;
+  --color-ink-muted: #8a909d;
 
   --color-leaf: #6ee7b7;
   --color-leaf-deep: #10b981;
@@ -26,14 +26,14 @@
 
 html[data-theme="light"] {
   --color-void: #f8fafc;
-  --color-glass: rgb(255 255 255 / 0.92);
+  --color-glass: rgb(255 255 255 / 0.96);
   --color-glass-strong: #ffffff;
   --color-hairline: rgb(0 0 0 / 0.1);
   --color-hairline-soft: rgb(0 0 0 / 0.06);
 
   --color-ink: #0f172a;
   --color-ink-secondary: #334155;
-  --color-ink-muted: #64748b;
+  --color-ink-muted: #5b6472;
 
   --color-leaf: #059669;
   --color-leaf-deep: #047857;
@@ -142,15 +142,15 @@ html[data-theme="light"] .atmosphere {
 .glass {
   background: var(--color-glass);
   border: 1px solid var(--color-hairline);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .glass-strong {
   background: var(--color-glass-strong);
   border: 1px solid var(--color-hairline);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
 }
 
@@ -167,6 +167,28 @@ html[data-theme="light"] .glass-strong {
 :focus-visible {
   outline: 2px solid rgb(110 231 183 / 0.6);
   outline-offset: 2px;
+}
+
+/* Text-entry fields (composer textarea, sidebar search, settings inputs)
+   already show focus through their border / background treatments, so the
+   thick default outline is suppressed there — it rendered as a bright
+   green glowing box over the composer bar. Buttons, selects and other
+   controls keep their focus-visible outline. */
+textarea:focus-visible,
+input:focus-visible {
+  outline: none;
+}
+
+/* The composer shell keeps its glass border at rest and brightens it
+   subtly while the textarea inside has focus — a clean border transition,
+   never a glow. (.glass-strong's unlayered border wins over Tailwind's
+   border-color utilities, so this switch is defined here.) */
+.composer-shell {
+  transition: border-color 160ms ease;
+}
+
+.composer-shell:focus-within {
+  border-color: rgb(110 231 183 / 0.32);
 }
 
 /* ---- scrollbars ------------------------------------------------------ */
@@ -196,6 +218,7 @@ html[data-theme="light"] .glass-strong {
   font-size: 16px;
   line-height: 1.65;
   color: var(--color-ink);
+  max-width: 70ch;
   word-break: break-word;
 }
 .markdown-body > * + * {

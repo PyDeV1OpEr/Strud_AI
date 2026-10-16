@@ -26,6 +26,11 @@ class ChatRequestBody(BaseModel):
     # first created; later messages never reassign the chat.
     projectId: Optional[str] = Field(alias="projectId", default=None, max_length=100)
     attachments: Optional[list[AttachmentIn]] = None
+    # Per-message thinking effort for reasoning-capable local models
+    # (gpt-oss: trained "Reasoning: low|medium|high" system instruction).
+    thinkingLevel: Optional[str] = Field(alias="thinkingLevel", default=None)
+    # Per-message output budget override (validated before reaching the model).
+    maxTokens: Optional[int] = Field(alias="maxTokens", default=None, ge=1, le=32768)
 
     model_config = {"populate_by_name": True}
 
@@ -110,7 +115,7 @@ class ProfileFullRequestBody(BaseModel):
 class ModelActiveUpdateBody(BaseModel):
     modelId: Optional[str] = Field(alias="modelId", default=None)
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    maxTokens: Optional[int] = Field(alias="maxTokens", default=None, ge=1, le=8192)
+    maxTokens: Optional[int] = Field(alias="maxTokens", default=None, ge=1, le=32768)
     baseUrl: Optional[str] = Field(alias="baseUrl", default=None)
 
     model_config = {"populate_by_name": True}

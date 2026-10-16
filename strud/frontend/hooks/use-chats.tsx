@@ -33,6 +33,7 @@ import {
 import { chatStore } from "@/lib/store/chat-store";
 import { deriveTitle } from "@/lib/title";
 import { getUserId } from "@/lib/user-id";
+import { getStoredChatPrefs, resolveOutputTokens } from "@/lib/preferences";
 
 interface PendingAttachment {
   file: File;
@@ -267,6 +268,11 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       );
 
       try {
+        // Per-message generation controls come from the user's persisted
+        // chat preferences: the reasoning-effort selector and the output
+        // budget (advanced override wins over the length preset).
+        const prefs = getStoredChatPrefs();
+        const outputTokens = resolveOutputTokens(prefs);
         const response = await apiSendMessage({
           chatId,
           userId: getUserId(),
@@ -274,6 +280,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           ...(title ? { title } : {}),
           ...(chatProject ? { projectId: chatProject } : {}),
           ...(encodedAttachments.length ? { attachments: encodedAttachments } : {}),
+          thinkingLevel: prefs.thinkingLevel,
+          maxTokens: outputTokens,
         });
 
         appendMessage(

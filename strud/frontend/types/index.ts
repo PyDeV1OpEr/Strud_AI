@@ -147,7 +147,12 @@ export interface ModelConfig {
   baseUrl: string;
   temperature: number;
   maxTokens: number;
-  contextWindow: number;
+  /** Largest output budget the configuration permits (newer key). */
+  maxOutputTokens?: number;
+  /** Real context window from the model server; null when unknown. */
+  contextWindow: number | null;
+  /** Whether the configured model supports gpt-oss-style effort levels. */
+  reasoningEffortSupport?: boolean;
   status: "online" | "model_not_loaded" | "offline";
   capabilities: {
     text: boolean;
@@ -262,7 +267,16 @@ export interface ChatPreferences {
   enterToSend: boolean;
   showSourcesDefault: boolean;
   smoothTyping: boolean;
+  /** Reasoning effort for the configured model (gpt-oss effort levels). */
+  thinkingLevel: ThinkingLevel;
+  /** Response length preset; names an output-token budget. */
+  responseLength: ResponseLengthPreset;
+  /** Advanced override of the per-message output budget; null = preset. */
+  advancedOutputTokens: number | null;
 }
+
+export type ThinkingLevel = "low" | "medium" | "high";
+export type ResponseLengthPreset = "short" | "balanced" | "long" | "maximum";
 
 /** Response body from POST /api/chat */
 export interface AIResponse {
@@ -285,4 +299,8 @@ export interface ChatRequest {
     /** base64-encoded image data */
     data: string;
   }[];
+  /** Reasoning effort sent for THIS message (mapped server-side). */
+  thinkingLevel?: ThinkingLevel;
+  /** Per-message output token budget override (validated server-side). */
+  maxTokens?: number;
 }

@@ -46,6 +46,7 @@ from config import (  # noqa: E402
     LM_STUDIO_BASE_URL,
     LLM_TEMPERATURE,
     LLM_MAX_TOKENS,
+    LLM_MAX_OUTPUT_LIMIT as _LLM_MAX_OUTPUT_LIMIT,
     PDF_FILE,
     update_model_config,
 )
@@ -347,6 +348,9 @@ def chat(request: ChatRequestBody) -> ChatResponseBody:
                     "question": question,
                     "image_context": image_context,
                     "attachments": attachments,
+                    # Per-message generation controls (optional).
+                    "thinking_level": (request.thinkingLevel or "").strip().lower() or None,
+                    "max_tokens_override": request.maxTokens,
                 },
                 # LangGraph's checkpoint key must include the user too. Chat
                 # ids are client-generated and can collide across browsers.
@@ -636,6 +640,8 @@ def export_analytics(user_id: str = Query(..., min_length=1, max_length=200)) ->
 @app.get("/api/models")
 def get_models_info() -> dict:
     import requests
+    from config import LLM_MAX_OUTPUT_LIMIT
+
     available = []
     connected = False
     try:
@@ -647,6 +653,23 @@ def get_models_info() -> dict:
     except Exception:
         pass
 
+    # Real context window from LM Studio's extended REST API when reachable.
+    # Unknown -> null; the frontend must render "unknown", not a guess.
+    context_window: Optional[int] = None
+    if connected:
+        try:
+            v0_url = LM_STUDIO_BASE_URL.replace("/v1", "") + "/api/v0/models"
+            r2 = requests.get(v0_url, timeout=2.5)
+            if r2.ok:
+                for entry in r2.json().get("data", []):
+                    if entry.get("id") == MODEL:
+                        raw = entry.get("max_context_length")
+                        if isinstance(raw, (int, float)) and raw > 0:
+                            context_window = int(raw)
+                        break
+        except Exception:
+            pass
+
     return {
         "activeModel": {
             "id": MODEL,
@@ -655,7 +678,9 @@ def get_models_info() -> dict:
             "baseUrl": LM_STUDIO_BASE_URL,
             "temperature": LLM_TEMPERATURE,
             "maxTokens": LLM_MAX_TOKENS,
-            "contextWindow": 8192,
+            "maxOutputTokens": LLM_MAX_OUTPUT_LIMIT,
+            "contextWindow": context_window,
+            "reasoningEffortSupport": "gpt-oss" in MODEL.lower(),
             "status": "online" if (connected and MODEL in available) else ("model_not_loaded" if connected else "offline"),
             "capabilities": {"text": True, "vision": False},
         },
