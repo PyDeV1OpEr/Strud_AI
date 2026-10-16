@@ -18,8 +18,10 @@ import {
   Activity,
   Keyboard,
   ChevronRight,
+  Sparkles,
 } from "lucide-react";
 import { getUserId } from "@/lib/user-id";
+import { ProviderSection } from "./provider-section";
 
 // All section components
 import { ProfileSection } from "./profile-section";
@@ -39,6 +41,7 @@ type TabId =
   | "profile"
   | "analytics"
   | "models"
+  | "provider"
   | "knowledge"
   | "memory"
   | "privacy"
@@ -62,6 +65,7 @@ const TABS: TabDef[] = [
 
   // AI & DATA group
   { id: "analytics", label: "Usage & Analytics", icon: BarChart3, group: "AI & DATA" },
+  { id: "provider", label: "AI Provider", icon: Sparkles, group: "AI & DATA" },
   { id: "models", label: "Model Control", icon: Cpu, group: "AI & DATA" },
   { id: "knowledge", label: "Knowledge Base", icon: BookOpen, group: "AI & DATA" },
   { id: "memory", label: "Memory & Context", icon: Brain, group: "AI & DATA" },
@@ -126,6 +130,8 @@ export function SettingsControlCenter({
         return <AnalyticsSection userId={userId} showToast={showToast} />;
       case "models":
         return <ModelsSection showToast={showToast} />;
+      case "provider":
+        return <ProviderSection showToast={showToast} />;
       case "knowledge":
         return <KnowledgeBaseSection showToast={showToast} />;
       case "memory":

@@ -1,3 +1,5 @@
+import { authState } from "@/lib/auth-state";
+
 // ------------------------------------------------------------
 // Strud AI — API error type + backend URL
 // ------------------------------------------------------------
@@ -18,3 +20,11 @@ export class ApiError extends Error {
 
 export const CONNECTION_ERROR =
   "Strud couldn't connect to the AI backend. Make sure the backend is running and try again.";
+
+/** Attach the short-lived Supabase access token to protected backend calls. */
+export function authHeaders(headers: HeadersInit = {}): HeadersInit {
+  // authState is a module singleton updated by AuthProvider on token refresh.
+  return authState.accessToken
+    ? { ...headers, Authorization: `Bearer ${authState.accessToken}` }
+    : headers;
+}

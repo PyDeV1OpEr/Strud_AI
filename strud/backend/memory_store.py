@@ -1366,6 +1366,23 @@ class MemoryStore:
             "usage_records_count": usage_cnt,
         }
 
+    def attachment_owned(self, user_id: str, filename: str) -> bool:
+        """Whether an uploaded file is referenced by this user's history."""
+        with _LOCK, self._conn() as conn:
+            rows = conn.execute(
+                "SELECT attachments_json FROM conversations "
+                "WHERE user_id = ? AND attachments_json IS NOT NULL",
+                (user_id,),
+            ).fetchall()
+        for row in rows:
+            try:
+                attachments = json.loads(row["attachments_json"] or "[]")
+                if any(Path(str(item.get("url", ""))).name == filename for item in attachments):
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     def clean_orphaned_uploads(self, uploads_dir: Path) -> dict:
         """Deletes files in uploads_dir that are no longer referenced in conversations."""
         if not uploads_dir.exists():

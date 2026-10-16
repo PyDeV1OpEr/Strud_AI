@@ -2,7 +2,7 @@
 // Strud AI — Control Center & Settings API Client
 // ------------------------------------------------------------
 
-import { BACKEND_URL, ApiError } from "./errors";
+import { BACKEND_URL, ApiError, authHeaders } from "./errors";
 import type {
   ContributionCalendarData,
   DiagnosticsData,
@@ -33,6 +33,10 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  return fetch(input, { ...init, headers: authHeaders(init.headers) });
+}
+
 // ---- AI Usage & Analytics -------------------------------------------------
 
 export async function fetchUsageSummary(
@@ -44,7 +48,7 @@ export async function fetchUsageSummary(
   const params = new URLSearchParams({ user_id: userId, range });
   if (startDate) params.set("start_date", startDate);
   if (endDate) params.set("end_date", endDate);
-  const res = await fetch(`${BACKEND_URL}/api/analytics/summary?${params.toString()}`);
+  const res = await apiFetch(`${BACKEND_URL}/api/analytics/summary?${params.toString()}`);
   return handleResponse<UsageSummary>(res);
 }
 
@@ -54,7 +58,7 @@ export async function fetchUsageCalendar(
 ): Promise<ContributionCalendarData> {
   const params = new URLSearchParams({ user_id: userId });
   if (year) params.set("year", String(year));
-  const res = await fetch(`${BACKEND_URL}/api/analytics/calendar?${params.toString()}`);
+  const res = await apiFetch(`${BACKEND_URL}/api/analytics/calendar?${params.toString()}`);
   return handleResponse<ContributionCalendarData>(res);
 }
 
@@ -63,7 +67,7 @@ export async function fetchUsageTimeseries(
   range = "last_30_days",
 ): Promise<TimeseriesPoint[]> {
   const params = new URLSearchParams({ user_id: userId, range });
-  const res = await fetch(`${BACKEND_URL}/api/analytics/timeseries?${params.toString()}`);
+  const res = await apiFetch(`${BACKEND_URL}/api/analytics/timeseries?${params.toString()}`);
   const data = await handleResponse<{ timeseries: TimeseriesPoint[] }>(res);
   return data.timeseries;
 }
@@ -73,7 +77,7 @@ export async function fetchUsageModels(
   range = "last_30_days",
 ): Promise<ModelUsage[]> {
   const params = new URLSearchParams({ user_id: userId, range });
-  const res = await fetch(`${BACKEND_URL}/api/analytics/models?${params.toString()}`);
+  const res = await apiFetch(`${BACKEND_URL}/api/analytics/models?${params.toString()}`);
   const data = await handleResponse<{ models: ModelUsage[] }>(res);
   return data.models;
 }
@@ -83,14 +87,14 @@ export async function fetchUsageRequests(
   limit = 25,
 ): Promise<UsageRequestRecord[]> {
   const params = new URLSearchParams({ user_id: userId, limit: String(limit) });
-  const res = await fetch(`${BACKEND_URL}/api/analytics/requests?${params.toString()}`);
+  const res = await apiFetch(`${BACKEND_URL}/api/analytics/requests?${params.toString()}`);
   const data = await handleResponse<{ requests: UsageRequestRecord[] }>(res);
   return data.requests;
 }
 
 export async function exportUsageRecords(userId: string): Promise<UsageRequestRecord[]> {
   const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BACKEND_URL}/api/analytics/export?${params.toString()}`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/analytics/export?${params.toString()}`, {
     method: "POST",
   });
   const data = await handleResponse<{ records: UsageRequestRecord[] }>(res);
@@ -100,7 +104,7 @@ export async function exportUsageRecords(userId: string): Promise<UsageRequestRe
 // ---- AI Models ------------------------------------------------------------
 
 export async function fetchModelsInfo(): Promise<ModelsPayload> {
-  const res = await fetch(`${BACKEND_URL}/api/models`);
+  const res = await apiFetch(`${BACKEND_URL}/api/models`);
   return handleResponse<ModelsPayload>(res);
 }
 
@@ -108,7 +112,7 @@ export async function testModelConnection(
   modelId?: string,
   baseUrl?: string,
 ): Promise<{ ok: boolean; status: string; latencyMs: number | null; message: string; availableModels?: string[] }> {
-  const res = await fetch(`${BACKEND_URL}/api/models/test`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/models/test`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ modelId, baseUrl }),
@@ -122,7 +126,7 @@ export async function updateActiveModel(
   maxTokens?: number,
   baseUrl?: string,
 ): Promise<{ ok: boolean }> {
-  const res = await fetch(`${BACKEND_URL}/api/models/active`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/models/active`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ modelId, temperature, maxTokens, baseUrl }),
@@ -133,18 +137,18 @@ export async function updateActiveModel(
 // ---- Knowledge Base & RAG Inspector ---------------------------------------
 
 export async function fetchRagStatus(): Promise<RagStatus> {
-  const res = await fetch(`${BACKEND_URL}/api/rag/status`);
+  const res = await apiFetch(`${BACKEND_URL}/api/rag/status`);
   return handleResponse<RagStatus>(res);
 }
 
 export async function fetchRagDocuments(): Promise<RagDocument[]> {
-  const res = await fetch(`${BACKEND_URL}/api/rag/documents`);
+  const res = await apiFetch(`${BACKEND_URL}/api/rag/documents`);
   const data = await handleResponse<{ documents: RagDocument[] }>(res);
   return data.documents;
 }
 
 export async function testRagQuery(query: string): Promise<RagTestResponse> {
-  const res = await fetch(`${BACKEND_URL}/api/rag/test-query`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/rag/test-query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
@@ -153,7 +157,7 @@ export async function testRagQuery(query: string): Promise<RagTestResponse> {
 }
 
 export async function reindexRag(): Promise<{ ok: boolean; chunkCount: number; pageCount: number }> {
-  const res = await fetch(`${BACKEND_URL}/api/rag/reindex`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/rag/reindex`, {
     method: "POST",
   });
   return handleResponse<{ ok: boolean; chunkCount: number; pageCount: number }>(res);
@@ -163,7 +167,7 @@ export async function reindexRag(): Promise<{ ok: boolean; chunkCount: number; p
 
 export async function fetchMemories(userId: string): Promise<MemoryFact[]> {
   const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BACKEND_URL}/api/memory?${params.toString()}`);
+  const res = await apiFetch(`${BACKEND_URL}/api/memory?${params.toString()}`);
   const data = await handleResponse<{ facts: MemoryFact[] }>(res);
   return data.facts;
 }
@@ -173,7 +177,7 @@ export async function addMemory(
   content: string,
   source = "explicit",
 ): Promise<{ ok: boolean; id: number }> {
-  const res = await fetch(`${BACKEND_URL}/api/memory`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/memory`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ userId, content, source }),
@@ -183,7 +187,7 @@ export async function addMemory(
 
 export async function deleteMemory(userId: string, memoryId: number): Promise<{ ok: boolean }> {
   const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BACKEND_URL}/api/memory/${memoryId}?${params.toString()}`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/memory/${memoryId}?${params.toString()}`, {
     method: "DELETE",
   });
   return handleResponse<{ ok: boolean }>(res);
@@ -191,7 +195,7 @@ export async function deleteMemory(userId: string, memoryId: number): Promise<{ 
 
 export async function clearAllMemories(userId: string): Promise<{ ok: boolean; clearedCount: number }> {
   const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BACKEND_URL}/api/memory/all?${params.toString()}`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/memory/all?${params.toString()}`, {
     method: "DELETE",
   });
   return handleResponse<{ ok: boolean; clearedCount: number }>(res);
@@ -201,7 +205,7 @@ export async function updateMemorySettings(
   userId: string,
   memoryEnabled: boolean,
 ): Promise<{ ok: boolean; memoryEnabled: boolean }> {
-  const res = await fetch(`${BACKEND_URL}/api/memory/settings`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/memory/settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ userId, memoryEnabled }),
@@ -225,7 +229,7 @@ interface RawBackendProfile {
 
 export async function fetchProfileFull(userId: string): Promise<Profile> {
   const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BACKEND_URL}/api/profile?${params.toString()}`);
+  const res = await apiFetch(`${BACKEND_URL}/api/profile?${params.toString()}`);
   const data = await handleResponse<RawBackendProfile>(res);
   return {
     displayName: data.display_name ?? "Student",
@@ -241,7 +245,7 @@ export async function fetchProfileFull(userId: string): Promise<Profile> {
 }
 
 export async function updateProfileFull(userId: string, profile: Partial<Profile>): Promise<Profile> {
-  const res = await fetch(`${BACKEND_URL}/api/profile`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/profile`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -271,12 +275,12 @@ export async function updateProfileFull(userId: string, profile: Partial<Profile
 
 export async function fetchStorageStats(userId: string): Promise<StorageStats> {
   const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BACKEND_URL}/api/privacy/storage-info?${params.toString()}`);
+  const res = await apiFetch(`${BACKEND_URL}/api/privacy/storage-info?${params.toString()}`);
   return handleResponse<StorageStats>(res);
 }
 
 export async function cleanOrphanedUploads(): Promise<{ removed_count: number; freed_bytes: number }> {
-  const res = await fetch(`${BACKEND_URL}/api/privacy/clean-uploads`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/privacy/clean-uploads`, {
     method: "POST",
   });
   return handleResponse<{ removed_count: number; freed_bytes: number }>(res);
@@ -284,7 +288,7 @@ export async function cleanOrphanedUploads(): Promise<{ removed_count: number; f
 
 export async function exportFullData(userId: string): Promise<Record<string, unknown>> {
   const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BACKEND_URL}/api/privacy/export-data?${params.toString()}`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/privacy/export-data?${params.toString()}`, {
     method: "POST",
   });
   return handleResponse<Record<string, unknown>>(res);
@@ -294,7 +298,7 @@ export async function clearAllUserChats(
   userId: string,
   permanent = false,
 ): Promise<{ ok: boolean; clearedCount: number; permanent: boolean }> {
-  const res = await fetch(`${BACKEND_URL}/api/privacy/clear-history`, {
+  const res = await apiFetch(`${BACKEND_URL}/api/privacy/clear-history`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ userId, permanent }),
@@ -305,6 +309,6 @@ export async function clearAllUserChats(
 // ---- System Diagnostics ---------------------------------------------------
 
 export async function fetchDiagnostics(): Promise<DiagnosticsData> {
-  const res = await fetch(`${BACKEND_URL}/api/diagnostics`);
+  const res = await apiFetch(`${BACKEND_URL}/api/diagnostics`);
   return handleResponse<DiagnosticsData>(res);
 }

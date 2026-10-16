@@ -1,6 +1,8 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
+# Supabase access-token verification (optional at runtime; enabled via SUPABASE_URL)
+PyJWT[crypto]>=2.8.0
 
 # test runner for the offline backend suites (test_chat_persistence.py,
 # test_response_formatting.py); httpx is required by fastapi.testclient.

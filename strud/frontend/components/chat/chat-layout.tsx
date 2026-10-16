@@ -31,7 +31,10 @@ import { ChatMessages } from "./chat-messages";
 import { EmptyState } from "./empty-state";
 import { ChatComposer } from "@/components/composer/chat-composer";
 import { ProfileMenu } from "@/components/profile/profile-menu";
-import { ProfileDialog } from "@/components/profile/profile-dialog";
+import { ProfileDialog, type UserProfile } from "@/components/profile/profile-dialog";
+import { SignInDialog } from "@/components/profile/sign-in-dialog";
+import { useAuth } from "@/lib/auth";
+import * as cloudChats from "@/lib/api/cloud-chats";
 import {
   AboutDialog,
   DeleteChatDialog,
@@ -68,8 +71,23 @@ export function ChatLayout() {
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<Project | null>(null);
   const [renameTarget, setRenameTarget] = useState<Chat | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [profile, setProfile] = useState({ displayName: "Student" });
+  const [profile, setProfile] = useState<UserProfile>({
+    displayName: "Student",
+    email: null,
+    avatar: null,
+    joinedAt: null,
+  });
   const [profileSaving, setProfileSaving] = useState(false);
+  const [signInOpen, setSignInOpen] = useState(false);
+  const auth = useAuth();
+
+  // The send path raises a sign-in request; open the real OAuth dialog.
+  useEffect(() => {
+    if (store.signInRequested) {
+      setSignInOpen(true);
+      store.clearSignInRequested();
+    }
+  }, [store.signInRequested, store]);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -88,17 +106,71 @@ export function ChatLayout() {
         if (!cancelled)
           showToast("Projects need the backend running — showing cached state");
       });
-    void fetchProfile(getUserId())
-      .then((loaded) => {
-        if (!cancelled) setProfile(loaded);
-      })
-      .catch(() => {
-        /* anonymous "Student" default is fine offline */
-      });
     return () => {
       cancelled = true;
     };
   }, [showToast]);
+
+  // ---- profile: signed-in (Google-verified) vs local anonymous ----------
+  // Signed in: prepopulate from Google user metadata, then merge the
+  // user's persisted editable fields (profiles table, RLS private).
+  // Signed out: the backend local profile (or the Student default).
+  useEffect(() => {
+    let cancelled = false;
+    if (auth.user) {
+      const meta = auth.user.user_metadata as {
+        name?: string;
+        full_name?: string;
+        email?: string;
+        picture?: string;
+        avatar_url?: string;
+        email_verified?: boolean;
+      };
+      const googleProfile: UserProfile = {
+        displayName: meta.full_name || meta.name || meta.email?.split("@")[0] || "Student",
+        email: auth.user.email ?? meta.email ?? null,
+        avatar: meta.picture ?? meta.avatar_url ?? null,
+        joinedAt: auth.user.created_at ?? null,
+      };
+      // Persist the auto-populated profile once (upsert keeps manual edits).
+      void cloudChats
+        .cloudSaveProfile(auth.user.id, {
+          displayName: googleProfile.displayName,
+          email: googleProfile.email,
+          avatar: googleProfile.avatar,
+        })
+        .catch(() => undefined);
+      void cloudChats
+        .cloudLoadProfile(auth.user.id)
+        .then((stored) => {
+          if (cancelled || !stored) {
+            if (!cancelled) setProfile(googleProfile);
+            return;
+          }
+          const storedRow = stored as { displayName?: string };
+          setProfile({
+            ...googleProfile,
+            displayName: storedRow.displayName?.trim() || googleProfile.displayName,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setProfile(googleProfile);
+        });
+    } else {
+      void fetchProfile(getUserId())
+        .then((loaded) => {
+          if (!cancelled) {
+            setProfile((current) => ({ ...current, displayName: loaded.displayName }));
+          }
+        })
+        .catch(() => {
+          /* anonymous "Student" default is fine offline */
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.user]);
 
   const refreshProjectsAndChats = useCallback(async () => {
     const [loadedProjects, loadedChats] = await Promise.all([
@@ -240,12 +312,23 @@ export function ChatLayout() {
   const submitProfile = async (displayName: string) => {
     setProfileSaving(true);
     try {
-      const saved = await persistDisplayName(getUserId(), displayName);
-      setProfile(saved);
+      if (auth.user) {
+        // Signed in: persist to the RLS-protected profiles table (owner = sub).
+        await cloudChats.cloudSaveProfile(auth.user.id, {
+          displayName,
+          email: auth.user.email ?? null,
+          avatar:
+            (auth.user.user_metadata as { picture?: string } | null)?.picture ?? null,
+        });
+        setProfile((current) => ({ ...current, displayName }));
+      } else {
+        const saved = await persistDisplayName(getUserId(), displayName);
+        setProfile((current) => ({ ...current, displayName: saved.displayName }));
+      }
       setProfileOpen(false);
       showToast("Profile updated");
     } catch {
-      showToast("Couldn't save your name — is the backend running?");
+      showToast(auth.user ? "Couldn't save your name. Try again." : "Couldn't save your name — is the backend running?");
     } finally {
       setProfileSaving(false);
     }
@@ -444,6 +527,34 @@ export function ChatLayout() {
         {store.error && (
           <Toast message={store.error} />
         )}
+
+        {/* Local chats import banner: never auto-uploaded; explicit consent only. */}
+        {store.importableLocalChats && store.importableLocalChats.length > 0 && (
+          <div className="glass-strong pointer-events-auto fixed inset-x-4 bottom-24 z-40 mx-auto flex max-w-md flex-col gap-2 rounded-2xl p-3.5 sm:left-6 sm:right-auto">
+            <p className="text-[13px] font-medium text-[var(--color-ink)]">
+              Import {store.importableLocalChats.length} local chat{store.importableLocalChats.length === 1 ? "" : "s"}?
+            </p>
+            <p className="text-[12px] leading-relaxed text-[var(--color-ink-muted)]">
+              Chats made before you signed in are stored only in this browser.
+              Importing copies them into your account — nothing is uploaded
+              without your confirmation.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={store.dismissImportableLocalChats}
+                className="rounded-lg px-3 py-1.5 text-[12px] text-[var(--color-ink-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-ink)]"
+              >
+                Not now
+              </button>
+              <button
+                onClick={() => void store.importLocalChats()}
+                className="rounded-lg bg-emerald-400/90 px-3 py-1.5 text-[12px] font-medium text-emerald-950 hover:bg-emerald-300"
+              >
+                Import to my account
+              </button>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* ---- Dialogs ------------------------------------------------------ */}
@@ -467,10 +578,15 @@ export function ChatLayout() {
         key={profileOpen ? `profile-open-${profile.displayName}` : "profile-closed"}
         open={profileOpen}
         userId={getUserId()}
-        displayName={profile.displayName}
+        profile={profile}
+        signedIn={Boolean(auth.user)}
         saving={profileSaving}
         onClose={() => setProfileOpen(false)}
         onSave={(displayName) => void submitProfile(displayName)}
+      />
+      <SignInDialog
+        open={signInOpen}
+        onClose={() => setSignInOpen(false)}
       />
       <ProjectDialog
         key={

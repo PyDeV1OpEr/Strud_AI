@@ -10,6 +10,7 @@
     "test:markdown": "node --experimental-strip-types tests/markdown-rendering.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "lucide-react": "^1.52.0",
     "motion": "^14.0.0",
     "next": "16.4.0",

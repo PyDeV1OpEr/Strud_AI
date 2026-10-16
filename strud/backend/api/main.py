@@ -32,7 +32,8 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from rich.console import Console
 
 # ---- locate the existing Strud backend -----------------------------
@@ -63,6 +64,7 @@ from cli.interface import StrudCLI  # noqa: E402
 from strud.backend.tutoring_graph import build_tutoring_graph  # noqa: E402
 from strud.backend.memory_store import get_memory_store  # noqa: E402
 from strud.backend.llm_chain import reset_chat_model  # noqa: E402
+from ..auth import AUTH_CONFIGURED, verify_access_token  # noqa: E402
 
 from ..models.schemas import (  # noqa: E402
     ChatProjectUpdateBody,
@@ -269,8 +271,6 @@ def _persist_attachments(request: ChatRequestBody) -> tuple[list[Path], list[dic
 
 app = FastAPI(title="Strud AI API", version="0.2.0")
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/api/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
-
 # CORS: the deployed frontend origin(s) come from STRUD_ALLOWED_ORIGINS
 # (comma-separated, scheme + host). The loopback regex keeps local
 # development unchanged; any host other than the configured origins is
@@ -281,6 +281,123 @@ _ALLOWED_ORIGINS = [
     for origin in _ALLOWED_ORIGINS_ENV.split(",")
     if origin.strip()
 ]
+# ------------------------------------------------------------
+# Authentication + identity forcing.
+#
+# With SUPABASE_URL configured, protected /api routes require the Google
+# session JWT (Supabase Auth). The VERIFIED subject then replaces every
+# user_id / userId in the query string and JSON body, so a caller can
+# never act on another user's rows by sending a different ID. When auth
+# is not configured (local development), behavior is unchanged.
+# ------------------------------------------------------------
+
+class SupabaseAuthScopeMiddleware:
+    """Pure-ASGI: verify Bearer JWT, then force identity to its subject."""
+
+    PUBLIC_PREFIXES = ("/api/health",)
+    BODY_METHODS = ("POST", "PUT", "PATCH")
+
+    def __init__(self, app):  # noqa: ANN001 — Starlette middleware signature
+        self.app = app
+
+    async def __call__(self, scope, receive, send):  # noqa: C901, ANN001
+        if scope["type"] != "http" or not AUTH_CONFIGURED:
+            await self.app(scope, receive, send)
+            return
+        if scope.get("method") == "OPTIONS":  # CORS preflight carries no token
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if any(path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES):
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(  # type: ignore[arg-type]
+            (key.decode("latin-1").lower(), value.decode("latin-1"))
+            for key, value in scope.get("headers", [])
+        )
+        authorization = headers.get("authorization", "")
+        token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+        if not token:
+            response = JSONResponse({"detail": "Sign in required."}, status_code=401)
+            await response(scope, receive, send)
+            return
+
+        try:
+            subject = await run_in_threadpool(verify_access_token, token)
+        except HTTPException:
+            response = JSONResponse({"detail": "Unauthorized."}, status_code=401)
+            await response(scope, receive, send)
+            return
+        scope.setdefault("state", {})["authenticated_user_id"] = subject
+
+        # ---- identity forcing ------------------------------------------
+        method = scope.get("method", "GET")
+        if scope.get("query_string"):
+            from urllib.parse import parse_qsl, urlencode
+
+            pairs = [
+                (key, subject if key == "user_id" else value)
+                for key, value in parse_qsl(
+                    scope["query_string"].decode("utf-8", "replace"),
+                    keep_blank_values=True,
+                )
+                if key != "user_id" or value != subject
+            ]
+            if not any(key == "user_id" for key, _ in pairs):
+                pairs.append(("user_id", subject))
+            scope["query_string"] = urlencode(pairs).encode("utf-8")
+
+        if method in self.BODY_METHODS:
+            content_type = headers.get("content-type", "")
+            if content_type.startswith("application/json"):
+                buffered = bytearray()
+                disconnected = False
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.request":
+                        buffered.extend(message.get("body", b""))
+                        if not message.get("more_body", False):
+                            break
+                    elif message["type"] == "http.disconnect":  # pragma: no cover
+                        disconnected = True
+                        break
+                if not disconnected and buffered:
+                    import json as _json
+
+                    try:
+                        payload = _json.loads(bytes(buffered))
+                        if isinstance(payload, dict):
+                            payload["userId"] = subject
+                            buffered = bytearray(
+                                _json.dumps(payload).encode("utf-8")
+                            )
+                    except (ValueError, TypeError):
+                        pass  # non-JSON body — FastAPI will reject it anyway
+
+                sent_body = False
+
+                async def body_receive():  # noqa: ANN202, WPS430
+                    nonlocal sent_body
+                    if not sent_body:
+                        sent_body = True
+                        return {
+                            "type": "http.request",
+                            "body": bytes(buffered),
+                            "more_body": False,
+                        }
+                    return {"type": "http.disconnect"}
+
+                await self.app(scope, body_receive, send)
+                return
+
+        await self.app(scope, receive, send)
+
+
+# Add authentication first, then CORS. Starlette runs the last-added
+# middleware outermost, ensuring even a 401 has the CORS headers the browser
+# needs to surface a useful sign-in error.
+app.add_middleware(SupabaseAuthScopeMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
@@ -352,6 +469,31 @@ def health() -> dict:
         "retrievalMode": status.get("retrieval_mode"),
         "model": MODEL,
     }
+
+
+@app.get("/api/uploads/{filename}")
+def get_upload(filename: str, http_request: Request):
+    """Return an attachment only to its authenticated owner.
+
+    Upload names are UUIDs, but UUID obscurity is not an authorization
+    control.  The middleware supplies the verified Supabase subject when
+    authentication is enabled; local development retains the legacy route.
+    """
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    path = UPLOADS_DIR / safe_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    authenticated_user = getattr(http_request.state, "authenticated_user_id", None)
+    if AUTH_CONFIGURED and (
+        not authenticated_user
+        or not get_memory_store().attachment_owned(authenticated_user, safe_name)
+    ):
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    from fastapi.responses import FileResponse
+
+    return FileResponse(path)
 
 
 @app.post("/api/chat", response_model=ChatResponseBody)

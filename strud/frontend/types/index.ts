@@ -278,6 +278,9 @@ export interface ChatPreferences {
 export type ThinkingLevel = "low" | "medium" | "high";
 export type ResponseLengthPreset = "short" | "balanced" | "long" | "maximum";
 
+/** AI provider modes in Settings → AI Provider. */
+export type ProviderId = "gptoss" | "qwen" | "gemini" | "custom";
+
 /** Response body from POST /api/chat */
 export interface AIResponse {
   messageId: string;

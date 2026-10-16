@@ -7,7 +7,7 @@
 // ------------------------------------------------------------
 
 import type { AIResponse, ChatRequest } from "@/types";
-import { BACKEND_URL, ApiError, CONNECTION_ERROR } from "./errors";
+import { BACKEND_URL, ApiError, CONNECTION_ERROR, authHeaders } from "./errors";
 
 const CHAT_TIMEOUT_MS = 300_000; // verification + vision can take a while
 
@@ -17,7 +17,7 @@ export async function sendMessage(request: ChatRequest): Promise<AIResponse> {
   try {
     response = await fetch(`${BACKEND_URL}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(request),
       signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
     });
@@ -58,7 +58,7 @@ export async function generateTitle(
   try {
     const response = await fetch(`${BACKEND_URL}/api/title`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ chatId, message }),
       signal: AbortSignal.timeout(30_000),
     });

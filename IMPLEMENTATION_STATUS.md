@@ -98,3 +98,29 @@ Suites NOT run (require the built index + timing): `tests/test_hybrid_retrieval.
 3. **Document add/remove/re-index-with-new-files** in Knowledge Base remains unsupported (single primary textbook by design); status/test-query/reindex are real and working.
 4. A per-request output budget above the preset "Maximum" is numeric-validated (up to 32768) and no artificial clamp is applied beyond the configured ceiling; if the model's context window is smaller, LM Studio enforces it — the Models page now shows the real window so oversized budgets are detectable in the UI.
 5. Thinking effort uses the gpt-oss prompt mechanism (verified supported for the configured model). If the owner swaps the model to one without effort levels, `/api/models` reports `reasoningEffortSupport:false`; the selector still persists but the honest banner should show it as informational — the backend only prepends the `Reasoning:` line (harmless instruction for non-reasoning models).
+
+## Authenticated cloud completion — October 16, 2026
+
+### Completed in code
+
+- Added Supabase Google OAuth session restoration, sign-in, sign-out, profile metadata hydration, and a sign-in gate that retains the unsent composer draft.
+- Added per-account chat/project/profile persistence clients and a consent-based local-chat import path. Cloud rows are queried only through the logged-in Supabase client and are additionally protected by RLS.
+- Added real provider configuration UI for GPT-OSS local mode, Qwen-compatible endpoints, Gemini OpenAI-compatible endpoints, and custom OpenAI-compatible endpoints. Connection tests issue a real small completion. Non-local providers are now actually used for chat rather than silently falling back to GPT-OSS; GPT-OSS continues through the existing backend Biology RAG path.
+- Provider API keys remain browser-local, per authenticated user, masked in the UI, excluded from Supabase and backend logs, and sent only to the configured provider. Non-secret provider settings are persisted in `provider_configs` and restored on later sessions.
+- Added strict backend bearer-token verification: signature, expiry, issuer, audience, and subject are required. JWKS verification supports Supabase asymmetric signing algorithms; legacy HS256 requires the configured trusted secret. The verified subject overwrites every supplied `user_id`/`userId`.
+- Registered the previously incomplete auth middleware and protected attachment reads by verified ownership.
+- Added `supabase/migrations/202610160001_authenticated_provider_config.sql`, an additive migration for provider configuration plus missing cloud message/profile columns. It enables RLS and applies owner-only policies; it has **not** been applied from this repository.
+
+### Verification performed
+
+- `./.venv/bin/python -m pytest strud/backend -q` — **25 passed** (includes JWT claim and forged-user-id authorization coverage).
+- `./.venv/bin/python -m unittest tests.test_ai_control_center` — **12 passed**.
+- `./.venv/bin/python tests/test_memory_and_quiz.py` — **34 passed, 0 failed**.
+- `strud/frontend`: `npx tsc --noEmit` — passed; `npm run lint` — passed with six existing `<img>`/unused-symbol warnings; `npm run build` — passed.
+
+### Manual production actions still required
+
+1. In Supabase SQL Editor (or the linked Supabase CLI), review and apply `supabase/migrations/202610160001_authenticated_provider_config.sql`. Do not use a destructive reset.
+2. Configure Google OAuth credentials in Supabase Auth, enable Google, and add `https://strud-ai.vercel.app` plus any preview domains to the redirect allow-list. The Google callback is `https://frdfpvulvlubaysykyxn.supabase.co/auth/v1/callback`.
+3. Set the deployed backend `SUPABASE_URL=https://frdfpvulvlubaysykyxn.supabase.co`; use the project JWT secret only for legacy HS256 projects, otherwise the backend verifies the public JWKS. Set `STRUD_ALLOWED_ORIGINS=https://strud-ai.vercel.app` and deploy the backend.
+4. Set `NEXT_PUBLIC_BACKEND_URL` in Vercel to the HTTPS backend URL, then redeploy. Local GPT-OSS cannot be reached by an HTTPS site over `http://localhost`; use it with local Strud or use a cloud provider.

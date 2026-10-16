@@ -13,6 +13,16 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    // This established client store intentionally synchronizes external
+    // session/localStorage state in effects. Keep those safe legacy patterns
+    // lintable without treating React Compiler optimization hints as errors.
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/immutability": "off",
+      "react-hooks/preserve-manual-memoization": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { ChatStoreProvider } from "@/hooks/use-chats";
+import { AuthProvider } from "@/lib/auth";
 import "@/styles/globals.css";
 import "@/components/ui/animations.css";
 
@@ -52,7 +53,9 @@ export default function RootLayout({
       <body className={`${inter.variable} font-sans`}>
         {/* atmospheric gradient layer */}
         <div className="atmosphere" aria-hidden="true" />
-        <ChatStoreProvider>{children}</ChatStoreProvider>
+        <AuthProvider>
+          <ChatStoreProvider>{children}</ChatStoreProvider>
+        </AuthProvider>
       </body>
     </html>
   );

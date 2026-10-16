@@ -20,24 +20,50 @@ import {
   type ReactNode,
 } from "react";
 
-import type { Attachment, Chat, Message } from "@/types";
+import type { Attachment, Chat, Message, Source } from "@/types";
 import {
   createChat as makeChat,
   sendMessage as apiSendMessage,
   ApiError,
   generateTitle,
   fetchChats,
+  fetchChatMessages,
+  persistMessage,
+  persistChatRow,
+  importLocalChat,
   persistTitle,
   moveChatToBin,
 } from "@/lib/api";
 import { chatStore } from "@/lib/store/chat-store";
 import { deriveTitle } from "@/lib/title";
+import { authState, subscribeAuthState } from "@/lib/auth-state";
+import { isSupabaseConfigured } from "@/lib/supabase";
 import { getUserId } from "@/lib/user-id";
 import { getStoredChatPrefs, resolveOutputTokens } from "@/lib/preferences";
+import {
+  getProviderKey,
+  loadProviderConfig,
+  PROVIDER_PRESETS,
+} from "@/lib/provider-config";
+import {
+  sendDirectChat,
+  checkBackendHealth,
+} from "@/lib/api/providers";
+import { BACKEND_URL } from "@/lib/api/errors";
 
 interface PendingAttachment {
   file: File;
   previewUrl: string;
+}
+
+let backendHealthCache: boolean | null = null;
+
+/** Reachability of the FastAPI backend decides RAG vs direct-provider routing. */
+async function isBackendReachable(): Promise<boolean> {
+  if (backendHealthCache === null) {
+    backendHealthCache = await checkBackendHealth(BACKEND_URL);
+  }
+  return backendHealthCache;
 }
 
 interface ChatStoreValue {
@@ -60,6 +86,14 @@ interface ChatStoreValue {
 
   addAttachment: (file: File) => void;
   removeAttachment: (id: string) => void;
+
+  /** Set when a send was blocked because the user must sign in first. */
+  signInRequested: boolean;
+  clearSignInRequested: () => void;
+  /** Local (pre-sign-in) chats the user can import into their account. */
+  importableLocalChats: Chat[] | null;
+  importLocalChats: () => Promise<void>;
+  dismissImportableLocalChats: () => void;
 
   send: (text: string) => Promise<void>;
 }
@@ -113,19 +147,80 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     chatStore.getServerSnapshot,
   );
 
+  const [signInRequested, setSignInRequested] = useState(false);
+  const [importableLocalChats, setImportableLocalChats] = useState<Chat[] | null>(null);
+  const [signedInUserId, setSignedInUserId] = useState<string | null>(
+    typeof window !== "undefined" ? authState.userId : null,
+  );
+
+  useEffect(() => subscribeAuthState(() => setSignedInUserId(authState.userId)), []);
+
+  // Cloud history load — keyed on the verified identity, so history loads
+  // on sign-in (and reloads correctly after sign-out/sign-in cycling).
   useEffect(() => {
     let cancelled = false;
-    void fetchChats(getUserId()).then((serverChats) => {
-      if (cancelled || serverChats.length === 0) return;
+    const identity = getUserId();
+    void fetchChats(identity).then((serverChats) => {
+      if (cancelled) return;
       const local = chatStore.getSnapshot();
       const serverIds = new Set(serverChats.map((chat) => chat.id));
       // Retain old browser-only chats while allowing durable server history
       // (including attachments) to be the source of truth for matching IDs.
       chatStore.set([...serverChats, ...local.filter((chat) => !serverIds.has(chat.id))]);
+      if (signedInUserId && authState.userId) {
+        // Offer a one-time import of local-only (anonymous) chats.
+        const candidates = local.filter(
+          (chat) => !serverIds.has(chat.id) && chat.messages.length > 0,
+        );
+        setImportableLocalChats(candidates.length > 0 && !markerSeen() ? candidates : null);
+      }
     }).catch(() => {
-      // Offline cache remains usable while the backend is unavailable.
+      // Offline cache remains usable while persistence is unavailable.
     });
     return () => { cancelled = true; };
+  }, [signedInUserId]);
+
+  function markerSeen(): boolean {
+    try {
+      return window.localStorage.getItem("strud.local-import-declined.v1") === authState.userId;
+    } catch {
+      return true;
+    }
+  }
+
+  const importLocalChats = useCallback(async () => {
+    const candidates = importableLocalChats;
+    if (!candidates || !authState.userId) return;
+    let imported = 0;
+    for (const chat of candidates) {
+      try {
+        await importLocalChat(authState.userId, chat);
+        imported += 1;
+      } catch {
+        // keep the chat local when its cloud copy fails
+      }
+    }
+    const remaining = chatStore
+      .getSnapshot()
+      .filter((chat) => !candidates.some((candidate) => candidate.id === chat.id));
+    const cloudCopies = await fetchChats(getUserId()).catch(() => [] as Chat[]);
+    chatStore.set([...cloudCopies, ...remaining]);
+    setImportableLocalChats(null);
+    if (imported > 0) {
+      setError(`Imported ${imported} local chat${imported === 1 ? "" : "s"} into your account.`);
+      setTimeout(() => setError(null), 3000);
+    }
+  }, [importableLocalChats]);
+
+  const dismissImportableLocalChats = useCallback(() => {
+    try {
+      if (authState.userId) {
+        window.localStorage.setItem("strud.local-import-declined.v1", authState.userId);
+      }
+    } catch {
+      /* storage unavailable */
+    }
+    setImportableLocalChats(null);
   }, []);
 
   // undefined = auto (follow the most recent chat), null = explicit
@@ -154,6 +249,19 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const selectChat = useCallback((id: string) => {
     setActiveChatId(id);
     setError(null);
+    // Signed in: the authoritative per-chat history comes from the database
+    // (the browser cache may hold only a recent window).
+    if (!authState.userId) return;
+    void fetchChatMessages(id, authState.userId)
+      .then((messages: Message[] | null) => {
+        if (!messages) return;
+        chatStore.set(
+          chatStore
+            .getSnapshot()
+            .map((entry) => (entry.id === id ? { ...entry, messages } : entry)),
+        );
+      })
+      .catch(() => undefined);
   }, []);
 
   const deleteChat = useCallback(async (id: string) => {
@@ -202,6 +310,14 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       const trimmed = text.trim();
       const hasAttachments = pendingAttachments.length > 0;
       if ((!trimmed && !hasAttachments) || isGenerating) return;
+
+      // ---- sign-in gate ------------------------------------------------
+      // The UI stays explorable signed out, but nothing is sent to any AI
+      // and nothing is written until the user authenticates.
+      if (isSupabaseConfigured() && !authState.userId) {
+        setSignInRequested(true);
+        return;
+      }
 
       setError(null);
       setIsGenerating(true);
@@ -267,40 +383,120 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
         }),
       );
 
-      try {
-        // Per-message generation controls come from the user's persisted
-        // chat preferences: the reasoning-effort selector and the output
-        // budget (advanced override wins over the length preset).
-        const prefs = getStoredChatPrefs();
-        const outputTokens = resolveOutputTokens(prefs);
-        const response = await apiSendMessage({
+      // Persist the chat row + user message when the account is cloud-backed
+      // (the backend also keeps its own working copy when it serves the turn).
+      const cloudUserId = authState.userId;
+      if (cloudUserId) {
+        void persistChatRow(chatId, cloudUserId, title ?? "New chat", chatProject, nowIso())
+          .catch(() => undefined);
+        void persistMessage(chatId, cloudUserId, {
           chatId,
-          userId: getUserId(),
-          message: trimmed,
-          ...(title ? { title } : {}),
-          ...(chatProject ? { projectId: chatProject } : {}),
-          ...(encodedAttachments.length ? { attachments: encodedAttachments } : {}),
-          thinkingLevel: prefs.thinkingLevel,
-          maxTokens: outputTokens,
-        });
+          role: "user",
+          content: trimmed,
+          createdAt: userMessage.createdAt,
+          ...(encodedAttachments.length && attachments.length
+            ? {
+                attachments: attachments.map((attachment) => ({
+                  ...attachment,
+                  url: `/api/uploads/${attachment.id}`,
+                })),
+              }
+            : {}),
+        }).catch(() => undefined);
+      }
+
+      try {
+        let assistantContent: string;
+        let sources: Source[] | undefined;
+
+        // ---- route: backend (RAG + verification) vs direct provider -------
+        const backendReachable = await isBackendReachable();
+
+        const config = cloudUserId
+          ? await loadProviderConfig(cloudUserId)
+          : null;
+        // GPT-OSS remains the backend/RAG route.  Every other selectable
+        // provider is called directly, so choosing it changes the model that
+        // answers rather than silently falling back to the server default.
+        if (backendReachable && (!config || config.provider === "gptoss")) {
+          // Per-message generation controls come from the user's persisted
+          // chat preferences: the reasoning-effort selector and the output
+          // budget (advanced override wins over the length preset).
+          const prefs = getStoredChatPrefs();
+          const outputTokens = resolveOutputTokens(prefs);
+          const response = await apiSendMessage({
+            chatId,
+            userId: getUserId(),
+            message: trimmed,
+            ...(title ? { title } : {}),
+            ...(chatProject ? { projectId: chatProject } : {}),
+            ...(encodedAttachments.length ? { attachments: encodedAttachments } : {}),
+            thinkingLevel: prefs.thinkingLevel,
+            maxTokens: outputTokens,
+          });
+          assistantContent = response.content;
+          sources = response.sources;
+        } else {
+          // Direct provider path: the user's own provider + key, browser →
+          // provider. No proxy server involved. Ungrounded (no textbook
+          // retrieval) — surfaced honestly instead of inventing sources.
+          if (cloudUserId && config) {
+            if (encodedAttachments.length > 0) {
+              throw new ApiError(
+                "Image attachments need the AI backend running (they use the vision + retrieval pipeline).",
+                "attachments on direct path",
+              );
+            }
+            const apiKey = getProviderKey(cloudUserId);
+            const preset = PROVIDER_PRESETS[config.provider];
+            if (preset.needsApiKey && !apiKey) {
+              throw new ApiError(
+                "Add your provider API key in Settings → AI Provider first.",
+                "missing key for direct path",
+              );
+            }
+            const history =
+              chatStore.getSnapshot().find((entry) => entry.id === chatId)?.messages ?? [];
+            const result = await sendDirectChat(
+              config,
+              apiKey,
+              history.filter((message) => message.id !== userMessage.id),
+              trimmed,
+            );
+            assistantContent = result.content;
+          } else {
+            throw new ApiError("Sign in to send messages.", "no session");
+          }
+        }
 
         appendMessage(
           chatId,
           {
-            id: response.messageId || crypto.randomUUID(),
+            id: crypto.randomUUID(),
             chatId,
             role: "assistant",
-            content: response.content,
+            content: assistantContent,
             createdAt: nowIso(),
-            ...(response.sources ? { sources: response.sources } : {}),
+            ...(sources ? { sources } : {}),
           },
           title,
         );
+        if (cloudUserId) {
+          void persistMessage(chatId, cloudUserId, {
+            chatId,
+            role: "assistant",
+            content: assistantContent,
+            createdAt: nowIso(),
+            ...(sources ? { sources } : {}),
+          }).catch(() => undefined);
+        }
       } catch (caught) {
         const friendly =
           caught instanceof ApiError
             ? caught.friendly
-            : "Strud couldn't process that. Please try again.";
+            : caught instanceof Error && caught.message
+              ? caught.message
+              : "Strud couldn't process that. Please try again.";
         setError(friendly);
         appendMessage(
           chatId,
@@ -366,6 +562,11 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       clearError: () => setError(null),
       addAttachment,
       removeAttachment,
+      signInRequested,
+      clearSignInRequested: () => setSignInRequested(false),
+      importableLocalChats,
+      importLocalChats,
+      dismissImportableLocalChats,
       send,
     }),
     [
@@ -382,6 +583,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       deleteChat,
       addAttachment,
       removeAttachment,
+      signInRequested,
+      importableLocalChats,
+      importLocalChats,
+      dismissImportableLocalChats,
       send,
     ],
   );
