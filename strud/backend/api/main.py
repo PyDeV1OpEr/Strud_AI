@@ -58,6 +58,7 @@ from Science.Biology.biology_engine import BiologyEngine  # noqa: E402
 from Science.Biology.biology_retriever import (  # noqa: E402
     get_retriever_status,
     initialize_retriever,
+    rebuild_retriever,
     retrieve_biology,
 )
 from cli.interface import StrudCLI  # noqa: E402
@@ -65,6 +66,7 @@ from strud.backend.tutoring_graph import build_tutoring_graph  # noqa: E402
 from strud.backend.memory_store import get_memory_store  # noqa: E402
 from strud.backend.llm_chain import reset_chat_model  # noqa: E402
 from ..auth import AUTH_CONFIGURED, verify_access_token  # noqa: E402
+from ..knowledge_base import configured as cloud_kb_configured, sync_source_to_cache, upload_canonical_source  # noqa: E402
 
 from ..models.schemas import (  # noqa: E402
     ChatProjectUpdateBody,
@@ -448,6 +450,8 @@ def _touch_rate_limit(http_request: Request) -> None:
 @app.on_event("startup")
 def _startup() -> None:
     try:
+        if cloud_kb_configured():
+            sync_source_to_cache()
         _ensure_retriever()
         status = get_retriever_status()
         logger.info(
@@ -457,6 +461,16 @@ def _startup() -> None:
         )
     except Exception:  # noqa: BLE001 — requests retry initialization
         logger.exception("Retriever initialization failed at startup")
+
+
+def _require_admin(http_request: Request) -> None:
+    """Production ingestion is restricted to explicit verified subjects."""
+    if not AUTH_CONFIGURED:
+        return
+    allowed = {value.strip() for value in os.environ.get("STRUD_ADMIN_USER_IDS", "").split(",") if value.strip()}
+    user_id = getattr(http_request.state, "authenticated_user_id", None)
+    if not allowed or user_id not in allowed:
+        raise HTTPException(status_code=403, detail="Administrator access required.")
 
 
 @app.get("/api/health")
@@ -1034,10 +1048,23 @@ def test_rag_query(request: RagQueryTestBody) -> dict:
 
 
 @app.post("/api/rag/reindex")
-def reindex_primary_textbook() -> dict:
-    _ensure_retriever()
+def reindex_primary_textbook(http_request: Request) -> dict:
+    _require_admin(http_request)
+    if not rebuild_retriever():
+        raise HTTPException(status_code=503, detail="Textbook re-indexing failed; the previous index was retained where possible.")
     status = get_retriever_status()
     return {"ok": True, "chunkCount": status.get("chunk_count"), "pageCount": status.get("page_count")}
+
+
+@app.post("/api/rag/cloud/upload")
+def upload_primary_textbook(http_request: Request) -> dict:
+    """Upload the verified local canonical source into private Storage once."""
+    _require_admin(http_request)
+    source = _REPO_ROOT / "Science" / "Biology" / "books" / "Biology_ResourceBook.pdf"
+    try:
+        return {"ok": True, **upload_canonical_source(source)}
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 # ------------------------------------------------------------

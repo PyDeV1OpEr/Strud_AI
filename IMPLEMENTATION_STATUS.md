@@ -124,3 +124,11 @@ Suites NOT run (require the built index + timing): `tests/test_hybrid_retrieval.
 2. Configure Google OAuth credentials in Supabase Auth, enable Google, and add `https://strud-ai.vercel.app` plus any preview domains to the redirect allow-list. The Google callback is `https://frdfpvulvlubaysykyxn.supabase.co/auth/v1/callback`.
 3. Set the deployed backend `SUPABASE_URL=https://frdfpvulvlubaysykyxn.supabase.co`; use the project JWT secret only for legacy HS256 projects, otherwise the backend verifies the public JWKS. Set `STRUD_ALLOWED_ORIGINS=https://strud-ai.vercel.app` and deploy the backend.
 4. Set `NEXT_PUBLIC_BACKEND_URL` in Vercel to the HTTPS backend URL, then redeploy. Local GPT-OSS cannot be reached by an HTTPS site over `http://localhost`; use it with local Strud or use a cloud provider.
+
+## Cloud Biology knowledge-base follow-up — October 16, 2026
+
+- **Source found and verified:** `Science/Biology/books/Biology_ResourceBook.pdf`, 7.1 MB, 245 pages, SHA-256 `594beef13de936579172e2be91de8833fbea7466326954426403dd516419fc46`. It is git-ignored and was not added to Git.
+- Existing persistent local index was found (`chunks.pkl`, TF-IDF, BM25 and visual caches). The project extraction/chunking pipeline preserves pages and source references; `tests/test_hybrid_retrieval.py` passed all 31 checks using the actual source.
+- Added a private server-side Supabase Storage integration. With `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` present on the backend, it downloads the canonical PDF to the backend data directory before retrieval initialization; the source upload endpoint creates/checks a private 25-MB-limited bucket and uploads the verified local source only for IDs in `STRUD_ADMIN_USER_IDS`.
+- Re-indexing is now an administrator-only authenticated action and performs a real rebuild instead of merely returning the current status.
+- **Blocked external action:** this workspace has no Supabase service-role credentials or configured backend cloud variables, so no Storage bucket/object was created and no upload/index was claimed. Configure those secrets on the backend, set `STRUD_ADMIN_USER_IDS` to the owner Supabase UUID, then call the authenticated upload endpoint once and the re-index endpoint.

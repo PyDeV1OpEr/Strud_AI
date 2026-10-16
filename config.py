@@ -9,7 +9,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
-PDF_FILE = BASE_DIR / "Science" / "Biology" / "books" / "Biology_ResourceBook.pdf"
+_LOCAL_PDF_FILE = BASE_DIR / "Science" / "Biology" / "books" / "Biology_ResourceBook.pdf"
 
 # Runtime data directory. Local development keeps everything in
 # strud_cache/ next to the source. Hosted deployments (Render / container
@@ -19,6 +19,19 @@ PDF_FILE = BASE_DIR / "Science" / "Biology" / "books" / "Biology_ResourceBook.pd
 _DATA_DIR_ENV = os.environ.get("STRUD_DATA_DIR", "").strip()
 
 CACHE_DIR = Path(_DATA_DIR_ENV) if _DATA_DIR_ENV else BASE_DIR / "strud_cache"
+
+# A deployed backend with these two secrets uses the private Supabase object
+# as the authoritative textbook.  Local development remains completely
+# offline and keeps using the existing source file.
+CLOUD_KB_ENABLED = bool(
+    os.environ.get("SUPABASE_URL", "").strip()
+    and os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+)
+PDF_FILE = (
+    CACHE_DIR / "knowledge_base" / "Biology_ResourceBook.pdf"
+    if CLOUD_KB_ENABLED
+    else _LOCAL_PDF_FILE
+)
 
 CHUNKS_FILE = CACHE_DIR / "chunks.pkl"
 TFIDF_FILE = CACHE_DIR / "tfidf.pkl"

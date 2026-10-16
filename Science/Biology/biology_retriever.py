@@ -960,6 +960,21 @@ def initialize_retriever() -> bool:
     return True
 
 
+def rebuild_retriever() -> bool:
+    """Atomically rebuild the primary-textbook indexes on an admin request."""
+    global _initialized
+    _initialized = False
+    if not PDF_FILE.exists() or not build_tfidf_database():
+        return False
+    load_semantic_cache()
+    if AUTO_BUILD_SEMANTIC and not semantic_available:
+        build_semantic_index()
+    ensure_bm25_index()
+    attach_visual_chunks()
+    _initialized = True
+    return True
+
+
 # ============================================================
 # VISUAL CHUNK ATTACHMENT (Qwen3-VL)
 # ============================================================
