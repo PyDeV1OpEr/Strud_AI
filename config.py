@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 
@@ -10,7 +11,14 @@ BASE_DIR = Path(__file__).resolve().parent
 
 PDF_FILE = BASE_DIR / "Science" / "Biology" / "books" / "Biology_ResourceBook.pdf"
 
-CACHE_DIR = BASE_DIR / "strud_cache"
+# Runtime data directory. Local development keeps everything in
+# strud_cache/ next to the source. Hosted deployments (Render / container
+# image with a mounted volume) point STRUD_DATA_DIR at the mounted disk —
+# the SQLite databases, uploads and retrieval indexes are all created
+# under whatever directory this resolves to.
+_DATA_DIR_ENV = os.environ.get("STRUD_DATA_DIR", "").strip()
+
+CACHE_DIR = Path(_DATA_DIR_ENV) if _DATA_DIR_ENV else BASE_DIR / "strud_cache"
 
 CHUNKS_FILE = CACHE_DIR / "chunks.pkl"
 TFIDF_FILE = CACHE_DIR / "tfidf.pkl"
@@ -144,11 +152,21 @@ _MODEL_CONFIG = _load_model_config()
 
 MODEL_PROVIDER = str(_MODEL_CONFIG.get("provider", "lm_studio"))
 
-MODEL = str(_MODEL_CONFIG.get("id", "openai/gpt-oss-20b"))
+# Environment overrides (hosted deployments). LLM_* environment variables
+# win over assistant_config.json values so a hosted backend (Render) is
+# configured without editing the config file inside an image.
+MODEL = os.environ.get("LLM_MODEL_ID", "").strip() or str(
+    _MODEL_CONFIG.get("id", "openai/gpt-oss-20b")
+)
 
-LM_STUDIO_BASE_URL = str(
+LM_STUDIO_BASE_URL = os.environ.get("LLM_BASE_URL", "").strip() or str(
     _MODEL_CONFIG.get("base_url", "http://localhost:1234/v1")
 )
+
+# Bearer token sent to the OpenAI-compatible endpoint. Local LM Studio
+# ignores Authorization entirely; hosted providers (e.g. Gemini's
+# OpenAI-compatible endpoint) REQUIRE a real key here.
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "").strip()
 
 CHAT_ENDPOINT = f"{LM_STUDIO_BASE_URL}/chat/completions"
 
@@ -186,7 +204,7 @@ def update_model_config(
     base_url: Optional[str] = None,
 ) -> dict:
     """Safely updates assistant_config.json model block and refreshes runtime globals."""
-    global ASSISTANT_CONFIG, _MODEL_CONFIG, MODEL, LM_STUDIO_BASE_URL, CHAT_ENDPOINT, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_MAX_OUTPUT_LIMIT
+    global ASSISTANT_CONFIG, _MODEL_CONFIG, MODEL, LM_STUDIO_BASE_URL, CHAT_ENDPOINT, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_MAX_OUTPUT_LIMIT, LLM_API_KEY
     try:
         with open(ASSISTANT_CONFIG_FILE, "r", encoding="utf-8") as f:
             full_cfg = json.load(f)
@@ -209,8 +227,14 @@ def update_model_config(
 
     ASSISTANT_CONFIG = _load_assistant_config()
     _MODEL_CONFIG = _load_model_config()
-    MODEL = str(_MODEL_CONFIG.get("id", "openai/gpt-oss-20b"))
-    LM_STUDIO_BASE_URL = str(_MODEL_CONFIG.get("base_url", "http://localhost:1234/v1"))
+    # env > file (same precedence as module load, above).
+    MODEL = os.environ.get("LLM_MODEL_ID", "").strip() or str(
+        _MODEL_CONFIG.get("id", "openai/gpt-oss-20b")
+    )
+    LM_STUDIO_BASE_URL = os.environ.get("LLM_BASE_URL", "").strip() or str(
+        _MODEL_CONFIG.get("base_url", "http://localhost:1234/v1")
+    )
+    LLM_API_KEY = os.environ.get("LLM_API_KEY", "").strip()
     CHAT_ENDPOINT = f"{LM_STUDIO_BASE_URL}/chat/completions"
     LLM_TEMPERATURE = float(_MODEL_CONFIG.get("temperature", 0.2))
     LLM_MAX_TOKENS = int(_MODEL_CONFIG.get("max_tokens", 2000))

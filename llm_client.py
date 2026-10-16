@@ -7,6 +7,7 @@ from typing import Optional
 from config import (
     MODEL,
     LM_STUDIO_BASE_URL,
+    LLM_API_KEY,
     CHAT_ENDPOINT,
     LLM_TEMPERATURE,
     LLM_MAX_TOKENS,
@@ -15,6 +16,7 @@ from config import (
 
 DEFAULT_BASE_URL = LM_STUDIO_BASE_URL
 DEFAULT_MODEL = MODEL
+DEFAULT_API_KEY = LLM_API_KEY
 DEFAULT_TEMPERATURE = LLM_TEMPERATURE
 DEFAULT_MAX_TOKENS = LLM_MAX_TOKENS
 REQUEST_TIMEOUT = LLM_TIMEOUT
@@ -48,6 +50,7 @@ class LLMClient:
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         timeout: int = REQUEST_TIMEOUT,
+        api_key: Optional[str] = None,
     ):
 
         self.base_url = base_url.rstrip("/")
@@ -55,6 +58,15 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        # "lm-studio" is the local placeholder (LM Studio ignores
+        # Authorization); anything else is sent as a real Bearer token
+        # for hosted OpenAI-compatible providers.
+        self.api_key = api_key if api_key is not None else DEFAULT_API_KEY
+        self._auth_headers = (
+            {"Authorization": f"Bearer {self.api_key}"}
+            if self.api_key and self.api_key != "lm-studio"
+            else {}
+        )
 
         self.chat_endpoint = (
             f"{self.base_url}/chat/completions"
@@ -74,6 +86,7 @@ class LLMClient:
             response = requests.get(
                 f"{self.base_url}/models",
                 timeout=5,
+                headers=self._auth_headers,
             )
 
             return response.ok
@@ -96,6 +109,7 @@ class LLMClient:
             response = requests.get(
                 f"{self.base_url}/models",
                 timeout=10,
+                headers=self._auth_headers,
             )
 
             response.raise_for_status()
@@ -160,6 +174,7 @@ class LLMClient:
                 self.chat_endpoint,
                 json=payload,
                 timeout=self.timeout,
+                headers=self._auth_headers,
             )
 
             response.raise_for_status()
@@ -191,6 +206,20 @@ class LLMClient:
                 error_detail = error.response.json()
             except Exception:
                 error_detail = error.response.text
+
+            # Useful, provider-shaped failures for hosted keys
+            # (Mode A). Never include the key itself in the message.
+            if status_code in (401, 403):
+                raise RuntimeError(
+                    "The provider rejected the API key "
+                    f"({status_code}). Check the key in Settings."
+                )
+
+            if status_code == 429:
+                raise RuntimeError(
+                    "The provider quota or rate limit was reached. "
+                    "Try again in a moment."
+                )
 
             raise RuntimeError(
                 f"LM Studio API error ({status_code}): "

@@ -29,7 +29,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import Field
 
-from config import MODEL, LM_STUDIO_BASE_URL, LLM_TEMPERATURE, LLM_MAX_TOKENS
+from config import MODEL, LM_STUDIO_BASE_URL, LLM_API_KEY, LLM_TEMPERATURE, LLM_MAX_TOKENS
 
 
 # ============================================================
@@ -59,7 +59,10 @@ def get_chat_model():
                 _chat_model = ChatOpenAI(
                     model=MODEL,
                     base_url=LM_STUDIO_BASE_URL,
-                    api_key="lm-studio",   # LM Studio ignores this
+                    # LM Studio ignores this; hosted providers (e.g. Gemini's
+                    # OpenAI-compatible endpoint) require a real key via
+                    # LLM_API_KEY.
+                    api_key=LLM_API_KEY or "lm-studio",
                     temperature=LLM_TEMPERATURE,
                     max_tokens=LLM_MAX_TOKENS,
                     timeout=120,

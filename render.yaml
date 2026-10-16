@@ -1,0 +1,35 @@
+# Strud AI — Render blueprint (backend web service).
+#
+# Deploy: Render dashboard → New → Blueprint → select this repo, OR
+# `render blueprint launch` (requires the Render CLI + your account auth).
+#
+# Owner-provided values (never commit them): STRUD_ALLOWED_ORIGINS and
+# every LLM_* credential are marked sync:false — set them in the Render
+# dashboard after the first deploy.
+#
+# Free-tier limitation (must stay visible): the free instance has NO
+# persistent disk — STRUD_DATA_DIR inside the container is EPHEMERAL,
+# so chat history resets on each restart/redeploy. A persistent disk
+# requires Render Starter ($7/mo) and the owner's explicit approval.
+
+services:
+  - type: web
+    name: strud-ai-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: STRUD_ALLOWED_ORIGINS
+        sync: false
+        description: Comma-separated frontend origins, e.g. https://strud-ai.vercel.app
+      - key: LLM_BASE_URL
+        sync: false
+        description: OpenAI-compatible chat endpoint base, e.g. https://generativelanguage.googleapis.com/v1beta/openai for Gemini
+      - key: LLM_API_KEY
+        sync: false
+        description: Bearer key for the provider above (never into the repo)
+      - key: LLM_MODEL_ID
+        sync: false
+        description: Provider model id, e.g. gemini-2.5-flash for Gemini OpenAI-compat

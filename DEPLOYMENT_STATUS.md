@@ -3,7 +3,7 @@
 Persistent tracker for the "deploy Strud AI to public production (Vercel + Supabase + Render)" effort.
 Secrets are **never** written here. Update after each stage so work can resume if the session ends.
 
-Last updated: 2026-10-16 (stage 0 + stage 1 complete)
+Last updated: 2026-10-16 (stages 0–4 complete; stage 7 matrix active)
 
 ---
 
@@ -54,28 +54,28 @@ Last updated: 2026-10-16 (stage 0 + stage 1 complete)
 
 ---
 
-## Stage 2 — Frontend production readiness (Vercel)
+## Stage 2 — Frontend production readiness (Vercel) — COMPLETE, VERIFIED
 
-Status: **in progress**
-
-- [ ] Vercel project created & linked to `PyDeV1OpEr/Strud_AI` with root directory `strud/frontend`.
-- [ ] `NEXT_PUBLIC_BACKEND_URL` set in Vercel (production + preview) once the Render backend URL exists.
-- [ ] First deployment verified: routing, refresh behavior, no localhost assumptions in the bundle.
-- [ ] Confirmed no secrets are bundled (only `NEXT_PUBLIC_*` variables are public by design).
-
-**Notes**: A deployed frontend without a reachable backend shows the app's existing friendly connection error — shipping it early is safe (nothing leaks), but the beta is only complete when the backend is live.
+- [x] Project `strud-ai` created on Vercel (`prj_WTgJRpMTrgODYsxwlT2vHkvv8Xle`, scope “Mohammed Unais' projects”).
+- [x] Production deployment **Ready** → **https://strud-ai.vercel.app** (HTTP 200, Next.js HTML served).
+- [x] Root cause fixed for the first 404: project had framework preset “Other”; switched to Next.js and redeployed (`vercel project update strud-ai --framework nextjs`).
+- [x] Assets verified: CSS + JS chunks serve 200; no `localhost` in served HTML.
+- [x] No secrets reachable in the frontend — only `NEXT_PUBLIC_BACKEND_URL` is a public variable and it is NOT yet set (see below).
+- [x] Vercel MCP connector scope blocked repo-linking (403 “re-authenticate to scope”); deployment done through the Vercel CLI after an owner-authorized device login. Git integration must be connected once in the dashboard to enable push-based deploys: https://vercel.com/dashboard → strud-ai → Settings → Git.
+- [ ] `NEXT_PUBLIC_BACKEND_URL` on Vercel (production) — blocked on the Render backend URL; run:
+      `vercel env add NEXT_PUBLIC_BACKEND_URL production` then redeploy. Without it the UI gracefully shows its existing connection-error state (no crash), but chat cannot work from the deployed site.
 
 ---
 
-## Stage 3 — Supabase (project restore + tables + auth)
+## Stage 3 — Supabase (project restore + tables + auth) — SCHEMA + RLS COMPLETE
 
-Status: **in progress**
+Project: `frdfpvulvlubaysykyxn` — “PyDeV1OpEr's Project” → **ACTIVE_HEALTHY** again (restore succeeded).
 
-Project: `frdfpvulvlubaysykyxn` — "PyDeV1OpEr's Project" (was INACTIVE/paused; free tier).
-
-- [ ] Project restored to ACTIVE.
-- [ ] Schema migration applied (mirrors the SQLite persistence model: chats, messages, memory, projects, usage, settings) — status below.
-- [ ] Row Level Security enabled with per-owner policies (owner identified by `auth.uid()` once auth is wired; service role used by the trusted backend for privileged paths).
+- [x] Project restored to ACTIVE.
+- [x] Migration `strud_core_tables` applied: `chats`, `projects`, `profiles`, `conversations`, `user_memory`, `quiz_sessions`, `quiz_attempts`, `ai_usage`, plus `provider_keys` (per-user provider API keys; secret bytes go into Supabase Vault, table stores only the vault secret id).
+- [x] Migration `strud_rls_policies` applied: RLS enabled on ALL 9 tables; `chats_owner_all` … `ai_usage_owner_read` policies enforce `user_id = auth.uid()::text`; **`provider_keys` has intentionally NO policies** (service-role-only; security advisor flags it as INFO by design).
+- [x] Verified via `pg_tables`: rowsecurity = true on all 9 tables; security advisor shows no findings other than the intentional `provider_keys` INFO and a password-protection WARN that is irrelevant to sign-in-with-Google-only.
+- [x] Backend SQLite live-data path remains untouched (zero data loss); the Postgres mirror is the persistence layer the backend switches to in the auth stage.
 - [ ] Google OAuth: requires **owner-provided credentials** (cannot be invented):
       - Create a Google Cloud OAuth client (Web application) with redirect URIs:
         - `https://<project-ref>.supabase.co/auth/v1/callback`
@@ -88,16 +88,21 @@ Credentials owner must provide (nothing stored here): Google OAuth Client ID/Sec
 
 ---
 
-## Stage 4 — Backend deployment readiness (Render)
+## Stage 4 — Backend deployment readiness (Render) — CONFIG CODE COMPLETE
 
-Status: **in progress / partially prepared**
+Status: production config implemented and locally verified; **Render deployment itself is an owner action (no Render connector).**
 
 - [x] Audit: backend cannot run on Vercel; Render chosen.
-- [ ] `Dockerfile` + `render.yaml` added (root repo, backend service) — prepared to support a rendered deploy.
-- [ ] env-driven CORS (`STRUD_ALLOWED_ORIGINS`) implemented; loopback regex retained as default for local dev.
-- [ ] Provider-key support via env (`LLM_BASE_URL`, `LLM_API_KEY`, provider presets incl. Gemini OpenAI-compat endpoint) — Mode A foundation. Per-user keys in Settings come after auth integration.
-- [ ] Rate limiting + request-size/upload validation review.
-- [ ] Owner actions required (no connector for Render; free tier web service):
+- [x] `Dockerfile` added (python:3.12-slim; installs both requirements files; serves uvicorn on `$PORT`).
+- [x] `render.yaml` added (web service, Docker runtime, free plan, `/api/health` health check; secrets as `sync:false`).
+- [x] env-driven CORS implemented: `STRUD_ALLOWED_ORIGINS` (comma-separated origins) + retained loopback regex for local dev.
+- [x] Rate limiting implemented + verified by test (`/api/title` → 429 after STRUD_RATE_LIMIT_PER_MINUTE calls, default 20/min per IP; applied to POST `/api/chat` and `/api/title`; health/GET excluded).
+- [x] Upload cap env-configurable: `STRUD_MAX_UPLOAD_BYTES` (default 8 MB, unchanged).
+- [x] Data directory env-driven: `STRUD_DATA_DIR` → all SQLite/index/upload paths (config.py) resolve under it (maps to a mounted disk).
+- [x] Provider-key support (Mode A foundation) implemented & verified end-to-end locally:
+      env `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_ID` override assistant_config.json (env > file precedence, including after `update_model_config`). `LLMClient` and LangChain `ChatOpenAI` send the real Bearer key when set; local LM Studio behavior unchanged when unset. Provider-shaped errors added: 401/403 → “provider rejected the API key”, 429 → “quota/rate limit”. The key is never logged.
+- [ ] Docker image build NOT verified locally — Docker is not installed on this machine. First verification happens at the Render deploy.
+- [x] Owner actions (exact steps):
       1. Push latest `main` (done in Stage 1 for this session's commit).
       2. At https://dashboard.render.com → New → Web Service → connect `PyDeV1OpEr/Strud_AI`.
       3. Runtime: Docker; Dockerfile path `/Dockerfile`; instance type: Free (backend boots; first /api/chat latency with free instances is cold-start heavy).
@@ -105,7 +110,9 @@ Status: **in progress / partially prepared**
       5. Set env vars (values owner-provided, kept out of repo): `STRUD_ALLOWED_ORIGINS=https://<vercel-domain>,…`, `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`.
       6. Verify `GET /api/health` returns `ok: true` over HTTPS.
 
-**Caveat (honest)**: the textbook PDF is copyrighted and git-ignored, so the index cannot be baked into the image from the repo. The deploy must either (a) know the index assets are uploaded to the mounted persistent disk before first use, or (b) accept the `textbookLoaded: false` degraded state, in which Biology RAG answers are labelled ungrounded. Until the index is provisioned, **Biology RAG is NOT production-ready** — do not announce RAG-verified answers.
+**Caveat (honest, unchanged)**: the textbook PDF is copyrighted and git-ignored, so the index cannot be baked into the image from the repo. Until index assets are provisioned into the volume at `/data`, `/api/health` will report `textbookLoaded: false` and **Biology RAG is NOT production-ready** — do not announce RAG-verified answers (the pipeline runs in its documented ungrounded fallback mode).
+
+**Free-tier note**: Render free instances have no persistent disk — user data is ephemeral (resets on restart/redeploy). Persistent disk requires Render Starter (+$7/mo) and the owner's explicit approval (none requested yet).
 
 ---
 
@@ -113,7 +120,7 @@ Status: **in progress / partially prepared**
 
 - [x] Decision: Mode A = user-provided provider keys proxied server-side; Gemini/OpenAI-compatible endpoint support via env first, per-user keys after auth.
 - [x] Per-user API-key storage/isolation designed (Supabase table + backend scoping by verified JWT `sub`), planned as a follow-on stage with auth. No keys in the frontend bundle or shared tables; keys are never logged.
-- [x] Connection test + useful provider errors (invalid key / quota / network / model availability) planned as part of the auth-locked stage.
+- [x] Useful provider errors implemented (invalid key → 401/403 message, quota/rate → 429 message, network/timeout messages kept); a live provider connection test needs a real user key (owner/each user).
 - [x] Mode B (local GPT-OSS) preserved for local deployments; hosted-site limitation documented above.
 - [x] Pricing note for users: each user's provider usage is billed to their own key/account — Strud never uses their quota for anything else, and the owner's personal API key/quota is never shared with users.
 
@@ -131,26 +138,29 @@ Status: **in progress / partially prepared**
 
 | # | Check | Status |
 |---|---|---|
-| 1 | Frontend builds | pending re-run on deployed branch |
-| 2 | Backend starts | pending (local ✓) |
-| 3 | Google auth works | blocked (needs owner OAuth creds) |
-| 4 | Create + retrieve chat (signed-in) | pending |
-| 5 | Data persists across sessions | pending |
-| 6 | Accounts can't access each other's data | pending |
-| 7 | API-key mode connects | pending |
-| 8 | Invalid keys / quotas give useful errors | pending |
-| 9 | Biology RAG returns pages | pending |
-| 10 | Desktop + mobile smoke | pending |
+| 1 | Frontend builds | ✅ verified — local build + Vercel production build both OK |
+| 2 | Backend starts | ✅ locally (uvicorn, offline suites 19 passed incl. persistence); Docker/Render boot pending |
+| 3 | Google auth works | ⛔ blocked (needs owner OAuth creds) |
+| 4 | Create + retrieve chat (signed-in) | ⛔ blocked on auth + Postgres backend integration |
+| 5 | Data persists across sessions | pending — backend runs SQLite; Postgres switch is the auth stage |
+| 6 | Accounts can't access each other's data | pending — RLS in place; e2e test needs auth wired |
+| 7 | API-key mode connects | ⏸️ env mechanism verified locally; real provider call needs a real key (owner) |
+| 8 | Invalid keys / quotas give useful errors | ✅ provider-shaped error mapping implemented (401/403/429); live provider test pending |
+| 9 | Biology RAG returns pages | ⛔ blocked (index assets not yet provisioned to a hosted backend) |
+| 10 | Desktop + mobile smoke | ✅ deployed site serves; interactive device smoke pending |
+
+Offline suites rerun after ALL backend edits this stage: `pytest strud/backend -q` → **19 passed**; env-precedence, bearer-header, rate-limit (429 after 20/min), and Gemini endpoint-shape checks all verified locally.
 
 ---
 
 ## Errors log
 
-(empty — appended as encountered)
+1. Vercel MCP connector → repo link: 403 “Not authorized: … scope mohammed-unais-projects” — token scope issue, not a config error. Worked around with the Vercel CLI + owner-authorized device login.
+2. First production deploy served edge 404: project created with framework preset “Other” → fixed to Next.js, redeployed, verified 200.
 
 ## Exact next steps (resume from here)
 
-1. Finish Stage 2: create/link the Vercel project, deploy, verify.
-2. Restore the Supabase project; apply migrations + RLS.
-3. Finish Stage 4 backend config + Mode A foundation in code; rerun offline test suites.
-4. Provide/collect the Google OAuth client + the Render deploy (owner manual actions, listed above).
+1. Owner: deploy the backend on Render with the runbook above; then set `NEXT_PUBLIC_BACKEND_URL` on Vercel and redeploy the frontend.
+2. Owner: provide Google OAuth credentials (Stage 3 list).
+3. Engineering (next session): backend Supabase Postgres integration + JWT verification on protected endpoints (the largest remaining task — schema/RLS is already live and ready), then per-user provider-key storage via `provider_keys` + Vault, and frontend sign-in.
+4. Engineering: provision the Biology index onto the Render volume and rerun retrieval evaluation before claiming ANY grounded answers.

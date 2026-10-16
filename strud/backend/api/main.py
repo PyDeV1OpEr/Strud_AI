@@ -20,14 +20,17 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 import sys
 import threading
+import time
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from rich.console import Console
@@ -230,7 +233,10 @@ def _session_renderer(session: StrudCLI) -> CapturingRenderer:
 # ------------------------------------------------------------
 
 UPLOADS_DIR = CACHE_DIR / "uploads"
-MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_BYTES = max(
+    1,
+    int(os.environ.get("STRUD_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))),
+)
 ALLOWED_IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
 
 
@@ -265,13 +271,61 @@ app = FastAPI(title="Strud AI API", version="0.2.0")
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/api/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
-# The Next.js dev server may bind to any free port; allow loopback only.
+# CORS: the deployed frontend origin(s) come from STRUD_ALLOWED_ORIGINS
+# (comma-separated, scheme + host). The loopback regex keeps local
+# development unchanged; any host other than the configured origins is
+# rejected by the browser.
+_ALLOWED_ORIGINS_ENV = os.environ.get("STRUD_ALLOWED_ORIGINS", "").strip()
+_ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in _ALLOWED_ORIGINS_ENV.split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ------------------------------------------------------------
+# Abuse protection — per-IP fixed-window rate limit (per worker).
+# The web UI sends one chat round-trip per message, so 20/min is far
+# above interactive use while capping runaway clients. Upstream proxies
+# (Render's edge) supply x-forwarded-for; REQUEST sending is limited,
+# health/get routes are not.
+# ------------------------------------------------------------
+
+_RATE_LIMIT_PER_MINUTE = max(
+    1,
+    int(os.environ.get("STRUD_RATE_LIMIT_PER_MINUTE", "20")),
+)
+_RATE_WINDOW_SECONDS = 60.0
+_rate_lock = threading.Lock()
+_rate_hits: "dict[str, deque[float]]" = {}
+
+
+def _touch_rate_limit(http_request: Request) -> None:
+    """Raise 429 when the calling IP exceeded STRUD_RATE_LIMIT_PER_MINUTE."""
+    forwarded = http_request.headers.get("x-forwarded-for", "")
+    client_ip = (
+        forwarded.split(",")[0].strip()
+        if forwarded
+        else (http_request.client.host if http_request.client else "unknown")
+    )
+    now = time.monotonic()
+    with _rate_lock:
+        hits = _rate_hits.setdefault(client_ip, deque())
+        while hits and now - hits[0] > _RATE_WINDOW_SECONDS:
+            hits.popleft()
+        if len(hits) >= _RATE_LIMIT_PER_MINUTE:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please wait a moment and try again.",
+            )
+        hits.append(now)
 
 
 @app.on_event("startup")
@@ -301,7 +355,7 @@ def health() -> dict:
 
 
 @app.post("/api/chat", response_model=ChatResponseBody)
-def chat(request: ChatRequestBody) -> ChatResponseBody:
+def chat(request: ChatRequestBody, http_request: Request) -> ChatResponseBody:
     """
     Chat via the LangGraph tutoring workflow — persistent memory,
     deterministic quiz scoring, textbook retrieval, identity guard.
@@ -310,6 +364,7 @@ def chat(request: ChatRequestBody) -> ChatResponseBody:
     (Qwen3-VL analysis is loaded into the session context); the
     follow-up question is then answered by the graph.
     """
+    _touch_rate_limit(http_request)
     _ensure_retriever()
     graph = _get_graph()
     question = (request.message or "").strip()
@@ -516,7 +571,8 @@ def update_profile(request: ProfileFullRequestBody) -> dict:
 
 
 @app.post("/api/title", response_model=TitleResponseBody)
-def title(request: TitleRequestBody) -> TitleResponseBody:
+def title(request: TitleRequestBody, http_request: Request) -> TitleResponseBody:
+    _touch_rate_limit(http_request)
     try:
         reply = _get_llm().chat(
             messages=[
