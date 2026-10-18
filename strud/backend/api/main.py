@@ -271,7 +271,37 @@ def _persist_attachments(request: ChatRequestBody) -> tuple[list[Path], list[dic
 # routes
 # ------------------------------------------------------------
 
-app = FastAPI(title="Strud AI API", version="0.2.0")
+from contextlib import asynccontextmanager
+
+
+# ------------------------------------------------------------
+# Application lifecycle.
+#
+# FastAPI lifespan (ASGI `lifespan` protocol) instead of the deprecated
+# @app.on_event("startup"): Vercel's Python runtime invokes the lifespan
+# context on cold start but does not reliably run legacy on_event startup
+# callbacks, which left freshly-created function instances without a
+# retriever until a chat request forced lazy initialization.
+# ------------------------------------------------------------
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):  # noqa: ANN201 — FastAPI lifespan signature
+    try:
+        if cloud_kb_configured():
+            sync_source_to_cache()
+        _ensure_retriever()
+        status = get_retriever_status()
+        logger.info(
+            "Retriever ready: %s pages, %s chunks",
+            status.get("page_count"),
+            status.get("chunk_count"),
+        )
+    except Exception:  # noqa: BLE001 — requests retry initialization
+        logger.exception("Retriever initialization failed at startup")
+    yield
+
+
+app = FastAPI(title="Strud AI API", version="0.2.0", lifespan=_lifespan)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 # CORS: the deployed frontend origin(s) come from STRUD_ALLOWED_ORIGINS
 # (comma-separated, scheme + host). The loopback regex keeps local
@@ -445,22 +475,6 @@ def _touch_rate_limit(http_request: Request) -> None:
                 detail="Too many requests. Please wait a moment and try again.",
             )
         hits.append(now)
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    try:
-        if cloud_kb_configured():
-            sync_source_to_cache()
-        _ensure_retriever()
-        status = get_retriever_status()
-        logger.info(
-            "Retriever ready: %s pages, %s chunks",
-            status.get("page_count"),
-            status.get("chunk_count"),
-        )
-    except Exception:  # noqa: BLE001 — requests retry initialization
-        logger.exception("Retriever initialization failed at startup")
 
 
 def _require_admin(http_request: Request) -> None:
