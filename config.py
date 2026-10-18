@@ -1,6 +1,14 @@
+# PEP 563 style annotation storage: config.py quotes Optional-type function
+# annotations without importing the typing name; under Python 3.14
+# annotations are lazily evaluated (PEP 649), but hosted runtimes on
+# Python 3.12 evaluate them eagerly at definition time. Declaring the
+# future import makes both behaviors identical.
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
+
 
 
 # ============================================================
