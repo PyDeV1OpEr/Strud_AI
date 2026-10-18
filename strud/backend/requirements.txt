@@ -1,10 +1,40 @@
+# Strud AI — backend API dependency set.
+#
+# This file is the dependency manifest closest to the FastAPI entrypoint
+# (strud/backend/api/main.py). Vercel's Python runtime installs the
+# requirements file found nearest the function source — NOT the repository
+# root one — so this list must cover the backend's full import graph:
+# the HTTP layer, the shared Strud pipeline modules (config.py,
+# llm_client.py, cli/, Science/) and the LangGraph tutoring stack.
+# The container image (Dockerfile) installs this file too, so keep the
+# pins here complete enough to run `uvicorn strud.backend.api.main:app`.
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
-# Supabase access-token verification (optional at runtime; enabled via SUPABASE_URL)
+httpx>=0.27.0
+
+# Auth — Supabase access-token verification (JWKS/HS256), enabled via SUPABASE_URL.
 PyJWT[crypto]>=2.8.0
 
-# test runner for the offline backend suites (test_chat_persistence.py,
-# test_response_formatting.py); httpx is required by fastapi.testclient.
+# Shared Strud pipeline imports (config.py, llm_client.py, Science/…).
+requests>=2.28.0
+numpy>=1.24.0
+pymupdf>=1.23.0
+scikit-learn>=1.2.0
+
+# CLI session layer imported by the API adapter (strud.backend.api.main
+# -> cli.interface -> StrudCLI; prompts/banners/rich output).
+rich>=13.0.0
+prompt-toolkit>=3.0.0
+pyfiglet>=1.0.0
+
+# LangChain / LangGraph tutoring graph + persistence (llm_chain.py,
+# tutoring_graph.py, SqliteSaver checkpoints).
+langchain>=1.0,<2
+langchain-openai>=1.0,<2
+langgraph>=1.0,<2
+langgraph-checkpoint-sqlite>=3.0,<4
+
+# Test runner for the offline backend suites (pytest/httpx used by
+# fastapi.testclient).
 pytest>=8.0.0
-httpx>=0.27.0
