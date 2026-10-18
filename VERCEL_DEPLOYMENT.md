@@ -34,32 +34,21 @@ Environment variables on the `strud-backend` project (Production):
    unless the backend code expects it — this is a Storage
    service_role/scoped key.
 2. **`STRUD_ADMIN_USER_IDS`** — the administrator's Supabase user UUID.
-3. **Git auto-deploy** — connecting the repository with
-   `vercel git connect` did not attach a Git integration to
-   `strud-backend` (a repo can back multiple projects; verify under
-   Settings → Git). Until then, redeploy the backend with
-   `vercel deploy --prod --yes` from the repository root.
-4. Optional server-side model — set `LLM_BASE_URL`, `LLM_API_KEY`,
+3. Optional server-side model — set `LLM_BASE_URL`, `LLM_API_KEY`,
    `LLM_MODEL_ID` (e.g. Gemini's OpenAI-compatible endpoint). Without
    these the backend has no reachable LLM and `/api/chat` returns 503.
 
-## Redeploying
+## Deploys and the bundled textbook
 
-```sh
-# backend (repository root; respects .gitignore)
-vercel deploy --prod --yes
-# frontend (after changing strud/frontend or backend-linked env vars)
-cd strud/frontend && vercel --prod
-# or re-build the last frontend deployment with updated env vars
-vercel redeploy <last-production-deployment-url>
-```
-
-Note: a **CLI deploy of the backend bundles the local Biology PDF**
-from `Science/Biology/books/` (not Git files — uploads only). Pushing
-commits does **not** trigger backend deploys until the Git integration
-in step 3. A future Git-based build will NOT contain the PDF, so the
-Supabase service-key configuration above becomes required for
-`textbookLoaded: true`.
+- **Git pushes to `main` auto-deploy the backend** (verified with
+  commit 54c6cc7). Git-based builds contain only Git-tracked files —
+  the Biology PDF is `.gitignore`d, so push builds report
+  `textbookLoaded: false` until the Supabase service-key configuration
+  above is in place.
+- **`vercel deploy --prod --yes` from a repository checkout** bundles
+  the checkout's local files (the CLI upload is not limited to Git-tracked
+  files), so it reports `textbookLoaded: true` immediately. Re-run it
+  after pushing if you need retrieval before the service key is set.
 
 ## Frontend
 
