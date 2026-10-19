@@ -490,13 +490,32 @@ def _require_admin(http_request: Request) -> None:
 @app.get("/api/health")
 def health() -> dict:
     status = get_retriever_status()
-    return {
+    # Missing-resource diagnostics (Phase-5 reproducibility): when the
+    # Biology resource book or its built index cannot be found, health
+    # must say so explicitly — including the path the backend looked at —
+    # so a fresh checkout can be diagnosed without reading the logs.
+    diagnostic = {
         "ok": True,
         "llmAvailable": check_lm_studio(),
         "textbookLoaded": bool(status.get("textbook_loaded")),
         "retrievalMode": status.get("retrieval_mode"),
         "model": MODEL,
     }
+    if not status.get("pdf_exists"):
+        diagnostic["textbookHint"] = (
+            "Biology resource PDF not found. Place your copy at the "
+            f"repository-relative path configured in config.py: {PDF_FILE}. "
+            "The index builds automatically on the next backend start."
+        )
+        diagnostic["expectedTextbookPath"] = str(PDF_FILE)
+    elif not status.get("textbook_loaded"):
+        diagnostic["textbookHint"] = (
+            "Biology resource PDF exists but the index is not loaded (or is "
+            "empty/corrupt). Restart the backend to build it, or check the "
+            "startup logs."
+        )
+        diagnostic["expectedTextbookPath"] = str(PDF_FILE)
+    return diagnostic
 
 
 @app.get("/api/uploads/{filename}")

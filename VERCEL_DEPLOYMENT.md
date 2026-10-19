@@ -1,76 +1,50 @@
-# Vercel deployment runbook
+# Vercel deployment runbook — frontend-only public demo
 
-The Next.js frontend and the FastAPI backend are **separate Vercel
-projects** backed by the same repository (`PyDeV1OpEr/Strud_AI`).
+Strud AI ships in **two operating modes** (owner decision, final):
 
-| Project | URL | Built from |
+| Mode | What runs | Where |
 | --- | --- | --- |
-| `strud-ai` (frontend) | https://strud-ai.vercel.app | CLI deploys from `strud/frontend` |
-| `strud-backend` (backend) | https://strud-backend.vercel.app | CLI deploys from the repository root |
+| **Complete application** | Next.js frontend + FastAPI backend + LM Studio models + Biology RAG | user's own computer |
+| **Public demo** | Next.js frontend only, no AI inference | Vercel (`strud-ai.vercel.app`) |
 
-## Backend architecture
+The FastAPI backend is **not deployed to any host.** A cloud function can
+use neither the local model server nor the full retrieval stack, so the
+public site presents the interface honestly: it explains that live
+Biology tutoring requires running Strud AI locally, and never sends
+requests to a nonexistent backend or pretends a model answered.
 
-`vercel.json` at the repository root maps every `/api/*` request to the
-existing FastAPI app (`strud.backend.api.main:app`) via `@vercel/python`.
-The runtime installs the requirements file **nearest the entrypoint**
-(`strud/backend/requirements.txt`), so that file carries the backend's
-full import graph — not the repository-root one.
+## Frontend project (`strud-ai`)
 
-Environment variables on the `strud-backend` project (Production):
+Deploys from `strud/frontend` (CLI or connected Git). Environment
+variables on Production:
 
 | Variable | Value | Purpose |
 | --- | --- | --- |
-| `STRUD_ALLOWED_ORIGINS` | `https://strud-ai.vercel.app` | CORS; loopback origins always allowed |
-| `STRUD_DATA_DIR` | `/tmp/strud-data` | Writable scratch dir for SQLite/index/uploads |
-| `SUPABASE_URL` | `https://frdfpvulvlubaysykyxn.supabase.co` | Enables Supabase JWT auth + cloud knowledge base |
+| `NEXT_PUBLIC_DEMO_MODE` | `true` | Builds the honest demo state (`strud/frontend/lib/demo.ts`) |
 
-## Manual steps still required (dashboard)
+Do **not** set `NEXT_PUBLIC_BACKEND_URL` on Vercel. In demo mode the
+frontend performs zero backend/provider requests: the chat store skips
+history sync, project sync, title generation and persistence, and a
+submitted message gets a clear "local inference required" notice with
+the repository link instead of a connection error.
 
-1. **`SUPABASE_SERVICE_ROLE_KEY`** — set it on `strud-backend`
-   (Production). With it, the backend downloads the canonical Biology
-   PDF from the private `strud-knowledge-base` bucket instead of relying
-   on files bundled at deploy time, and `STRUD_ADMIN_USER_IDS` unlocks
-   the admin upload/re-index endpoints. Do not use a legacy JWT here
-   unless the backend code expects it — this is a Storage
-   service_role/scoped key.
-2. **`STRUD_ADMIN_USER_IDS`** — the administrator's Supabase user UUID.
-3. Optional server-side model — set `LLM_BASE_URL`, `LLM_API_KEY`,
-   `LLM_MODEL_ID` (e.g. Gemini's OpenAI-compatible endpoint). Without
-   these the backend has no reachable LLM and `/api/chat` returns 503.
+Do **not** set Supabase variables for the demo; the public preview has
+no sign-in-backed features either.
 
-## Deploys and the bundled textbook
+## Local / complete application
 
-- **Git pushes to `main` auto-deploy the backend** (verified with
-  commit 54c6cc7). Git-based builds contain only Git-tracked files —
-  the Biology PDF is `.gitignore`d, so push builds report
-  `textbookLoaded: false` until the Supabase service-key configuration
-  above is in place.
-- **`vercel deploy --prod --yes` from a repository checkout** bundles
-  the checkout's local files (the CLI upload is not limited to Git-tracked
-  files), so it reports `textbookLoaded: true` immediately. Re-run it
-  after pushing if you need retrieval before the service key is set.
+Follow the root [README.md](README.md) → *Local Setup*. In short:
+local frontend `NEXT_PUBLIC_BACKEND_URL=http://localhost:8000`,
+backend `uvicorn strud.backend.api.main:app --port 8000`, models served
+by LM Studio on `http://localhost:1234/v1`.
 
-## Frontend
+## Removed hosted-backend configs
 
-- `NEXT_PUBLIC_BACKEND_URL=https://strud-backend.vercel.app`
-  (Production env var; rebuild the frontend to bake it in).
-- Local development stays on `strud/frontend/.env.local`
-  (`http://localhost:8000`).
-
-## Known limitations
-
-- **Ephemeral user data:** chats/projects/profile/uploads live in SQLite
-  under `/tmp` inside a function instance. They survive warm reuse of an
-  instance but NOT instance recycling, cold starts after idle, or
-  deployments. Durable storage needs a Supabase (or similar) migration
-  of `strud/backend/memory_store.py`.
-- **Cold-start retrieval:** the first request after an idle period
-  re-downloads (with the service key) and re-chunks/indexes the textbook
-  (~20 s locally; TF-IDF/BM25 legs only — sentence-transformers is not
-  installed on hosts and retrieval auto-degrades to the sparse legs).
-- `chat` requires a reachable OpenAI-compatible endpoint: a Vercel
-  function cannot reach your Mac's LM Studio (`localhost:1234`). The
-  browser's direct local-provider mode stays device-local.
-- Rate limiting is in-memory per function instance (20 req/min default).
-- Frontend Vercel preview URLs are not in `STRUD_ALLOWED_ORIGINS`;
-  add a preview URL explicitly when testing one.
+The repository previously carried hosted-backend deployment configs
+**`vercel.json`** (Vercel Python runtime) and **`render.yaml`** (Render
+blueprint). They were removed so an accidental push cannot spin up a
+hosted backend that cannot actually serve answers. The backend remains
+a local application (`strud/backend/`), and `Dockerfile` remains as an
+optional local/self-hosting containerization. If you ever want remote
+hosting, those files can be restored from Git history — but that is a
+deliberate future decision, not part of this release.

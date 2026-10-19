@@ -3,6 +3,7 @@
 // About / Settings / Delete-chat dialog surfaces.
 
 import { Dialog, Button } from "@/components/ui/primitives";
+import { isDemoMode, STRUD_REPO_URL } from "@/lib/demo";
 
 // ---- About ------------------------------------------------------------
 
@@ -42,7 +43,7 @@ export function AboutDialog({
           <div className="grid grid-cols-2 gap-2 text-xs">
             {(
               [
-                ["Frontend", "Next.js 15 + React 19"],
+                ["Frontend", "Next.js 16 + React 19"],
                 ["Styling", "Tailwind CSS v4"],
                 ["Backend", "FastAPI + Python"],
                 ["AI Engine", "LM Studio (Local LLM)"],
@@ -57,6 +58,26 @@ export function AboutDialog({
             ))}
           </div>
         </div>
+
+        {isDemoMode() && (
+          <div className="rounded-xl border border-[var(--color-hairline-soft)] bg-white/[0.03] p-4 text-[12.5px] leading-relaxed text-[var(--color-ink-secondary)]">
+            <p className="font-medium text-[var(--color-ink)]">Public preview</p>
+            <p className="mt-1">
+              This is the frontend-only web preview. The AI engine does not run
+              hosted — answer generation needs the local FastAPI backend plus
+              GPT-OSS 20B / Qwen3-VL 8B served by LM Studio on your machine.
+              Setup instructions are in the repository README.
+            </p>
+            <a
+              href={STRUD_REPO_URL}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-2 inline-flex text-emerald-300 underline decoration-emerald-400/40 underline-offset-2 hover:text-emerald-200"
+            >
+              PyDeV1OpEr/Strud_AI ↗
+            </a>
+          </div>
+        )}
 
         <p className="text-center text-[11px] text-[var(--color-ink-muted)]">
           Running fully locally — your data never leaves your device.

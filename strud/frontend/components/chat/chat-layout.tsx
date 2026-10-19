@@ -48,6 +48,7 @@ import { StrudLogo } from "@/components/profile/strud-logo";
 import { Toast } from "@/components/ui/primitives";
 import { SettingsControlCenter } from "@/components/settings/settings-control-center";
 import { applyAppearanceToDOM, getStoredAppearance } from "@/lib/preferences";
+import { isDemoMode, STRUD_REPO_URL } from "@/lib/demo";
 
 
 export function ChatLayout() {
@@ -96,7 +97,10 @@ export function ChatLayout() {
 
   // Server sync: chats, projects, and the local profile. Offline usage
   // falls back to the cached state without any project features.
+  // Demo mode has no backend at all — skip the sync entirely so the
+  // preview never fires requests it cannot complete.
   useEffect(() => {
+    if (isDemoMode()) return;
     let cancelled = false;
     void fetchProjects(getUserId())
       .then((loaded) => {
@@ -157,6 +161,7 @@ export function ChatLayout() {
           if (!cancelled) setProfile(googleProfile);
         });
     } else {
+      if (isDemoMode()) return; // no local profile store without a backend
       void fetchProfile(getUserId())
         .then((loaded) => {
           if (!cancelled) {
@@ -467,6 +472,30 @@ export function ChatLayout() {
             onOpenAbout={() => setAboutOpen(true)}
           />
         </header>
+
+        {/* Public-demo notice: an honest frontend-only preview state. */}
+        {isDemoMode() && (
+          <div
+            role="status"
+            className="mx-3 mb-1 flex flex-wrap items-baseline gap-x-2 rounded-2xl border border-[var(--color-hairline-soft)] bg-white/[0.04] px-4 py-2.5 text-[12.5px] leading-relaxed text-[var(--color-ink-secondary)]"
+          >
+            <span className="font-medium text-[var(--color-ink)]">
+              Public preview.
+            </span>
+            <span>
+              Live AI tutoring runs locally — the{" "}
+              <a
+                href={STRUD_REPO_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-emerald-300 underline decoration-emerald-400/40 underline-offset-2 hover:text-emerald-200"
+              >
+                GitHub repository ↗
+              </a>{" "}
+              has the complete setup guide.
+            </span>
+          </div>
+        )}
 
         {/* Messages / empty state */}
         {isEmpty ? (

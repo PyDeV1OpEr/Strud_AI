@@ -50,6 +50,7 @@ import {
   checkBackendHealth,
 } from "@/lib/api/providers";
 import { BACKEND_URL } from "@/lib/api/errors";
+import { DEMO_GATE_MESSAGE, isDemoMode } from "@/lib/demo";
 
 interface PendingAttachment {
   file: File;
@@ -157,7 +158,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
 
   // Cloud history load — keyed on the verified identity, so history loads
   // on sign-in (and reloads correctly after sign-out/sign-in cycling).
+  // In demo mode no backend exists: the localStorage cache is the whole
+  // story, and no request is made that could continuously fail.
   useEffect(() => {
+    if (isDemoMode()) return;
     let cancelled = false;
     const identity = getUserId();
     void fetchChats(identity).then((serverChats) => {
@@ -265,6 +269,13 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const deleteChat = useCallback(async (id: string) => {
+    // Demo mode: nothing is server-backed, so deletion stays local.
+    if (isDemoMode()) {
+      const next = chatStore.getSnapshot().filter((chat) => chat.id !== id);
+      chatStore.set(next);
+      setActiveChatId((active) => (active === id ? (next[0]?.id ?? null) : active));
+      return true;
+    }
     try {
       await moveChatToBin(id, getUserId());
       const next = chatStore.getSnapshot().filter((chat) => chat.id !== id);
@@ -305,11 +316,69 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  /**
+   * Public-demo behavior: create the chat locally and answer with an
+   * honest system notice instead of contacting any backend. No inference
+   * is simulated and no model output is fabricated.
+   */
+  const sendDemoPreview = useCallback(
+    (text: string) => {
+      setError(null);
+
+      const currentChats = chatStore.getSnapshot();
+      let chatId = activeChatId;
+      let title: string | undefined;
+      if (!chatId || !currentChats.some((chat) => chat.id === chatId)) {
+        chatId = makeChat().id;
+        title = text ? deriveTitle(text) : "New chat";
+      } else {
+        const current = currentChats.find((chat) => chat.id === chatId);
+        if (current?.messages.length === 0 && text) title = deriveTitle(text);
+      }
+
+      const attachments: Attachment[] = pendingAttachments.map((a) => ({
+        id: a.previewUrl,
+        url: a.previewUrl,
+        name: a.file.name,
+        mimeType: a.file.type,
+        size: a.file.size,
+      }));
+
+      appendMessage(
+        chatId,
+        {
+          id: crypto.randomUUID(),
+          chatId,
+          role: "user",
+          content: text,
+          createdAt: nowIso(),
+          ...(attachments.length ? { attachments } : {}),
+        },
+        title,
+      );
+      setActiveChatId(chatId);
+      setPendingAttachments([]);
+
+      appendMessage(chatId, {
+        id: crypto.randomUUID(),
+        chatId,
+        role: "assistant",
+        content: DEMO_GATE_MESSAGE,
+        createdAt: nowIso(),
+      }, title);
+    },
+    [activeChatId, appendMessage, pendingAttachments],
+  );
+
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
       const hasAttachments = pendingAttachments.length > 0;
       if ((!trimmed && !hasAttachments) || isGenerating) return;
+      if (isDemoMode()) {
+        sendDemoPreview(trimmed);
+        return;
+      }
 
       // ---- sign-in gate ------------------------------------------------
       // The UI stays explorable signed out, but nothing is sent to any AI
@@ -514,7 +583,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       }
 
       // Non-blocking backend title generation (when connected).
-      if (isFirstMessage && trimmed) {
+      if (isFirstMessage && trimmed && !isDemoMode()) {
         void generateTitle(chatId, trimmed).then((backendTitle) => {
           if (!backendTitle) return;
           const meaningful = backendTitle.trim();
@@ -536,6 +605,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       isGenerating,
       pendingAttachments,
       appendMessage,
+      sendDemoPreview,
     ],
   );
 
